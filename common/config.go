@@ -29,7 +29,9 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"gopkg.in/yaml.v2"
 )
 
@@ -49,19 +51,18 @@ var (
 // Configuration 配置文件定义结构体
 type Configuration struct {
 	// +++++++++++++++测试环境+++++++++++++++++
-	OnlineDSN               *dsn   `yaml:"online-dsn"`                // 线上环境数据库配置
-	TestDSN                 *dsn   `yaml:"test-dsn"`                  // 测试环境数据库配置
+	OnlineDSN               *Dsn   `yaml:"online-dsn"`                // 线上环境数据库配置
+	TestDSN                 *Dsn   `yaml:"test-dsn"`                  // 测试环境数据库配置
 	AllowOnlineAsTest       bool   `yaml:"allow-online-as-test"`      // 允许 Online 环境也可以当作 Test 环境
 	DropTestTemporary       bool   `yaml:"drop-test-temporary"`       // 是否清理Test环境产生的临时库表
 	CleanupTestDatabase     bool   `yaml:"cleanup-test-database"`     // 清理残余的测试数据库（程序异常退出或未开启drop-test-temporary）  issue #48
 	OnlySyntaxCheck         bool   `yaml:"only-syntax-check"`         // 只做语法检查不输出优化建议
 	SamplingStatisticTarget int    `yaml:"sampling-statistic-target"` // 数据采样因子，对应 PostgreSQL 的 default_statistics_target
 	Sampling                bool   `yaml:"sampling"`                  // 数据采样开关
+	SamplingCondition       string `yaml:"sampling-condition"`        // 指定采样条件，如：WHERE xxx LIMIT xxx;
 	Profiling               bool   `yaml:"profiling"`                 // 在开启数据采样的情况下，在测试环境执行进行profile
 	Trace                   bool   `yaml:"trace"`                     // 在开启数据采样的情况下，在测试环境执行进行Trace
 	Explain                 bool   `yaml:"explain"`                   // Explain开关
-	ConnTimeOut             int    `yaml:"conn-time-out"`             // 数据库连接超时时间，单位秒
-	QueryTimeOut            int    `yaml:"query-time-out"`            // 数据库SQL执行超时时间，单位秒
 	Delimiter               string `yaml:"delimiter"`                 // SQL分隔符
 
 	// +++++++++++++++日志相关+++++++++++++++++
@@ -92,7 +93,7 @@ type Configuration struct {
 	MaxDistinctCount     int      `yaml:"max-distinct-count"`        // 单条 SQL 中 Distinct 的最大数量
 	MaxIdxColsCount      int      `yaml:"max-index-cols-count"`      // 复合索引中包含列的最大数量
 	MaxTextColsCount     int      `yaml:"max-text-cols-count"`       // 表中含有的 text/blob 列的最大数量
-	MaxTotalRows         int64    `yaml:"max-total-rows"`            // 计算散粒度时，当数据行数大于 MaxTotalRows 即开启数据库保护模式，散粒度返回结果可信度下降
+	MaxTotalRows         uint64   `yaml:"max-total-rows"`            // 计算散粒度时，当数据行数大于 MaxTotalRows 即开启数据库保护模式，散粒度返回结果可信度下降
 	MaxQueryCost         int64    `yaml:"max-query-cost"`            // last_query_cost 超过该值时将给予警告
 	SpaghettiQueryLength int      `yaml:"spaghetti-query-length"`    // SQL最大长度警告，超过该长度会给警告
 	AllowDropIndex       bool     `yaml:"allow-drop-index"`          // 允许输出删除重复索引的建议
@@ -139,18 +140,8 @@ type Configuration struct {
 
 // Config 默认设置
 var Config = &Configuration{
-	OnlineDSN: &dsn{
-		Schema:  "information_schema",
-		Charset: "utf8mb4",
-		Disable: true,
-		Version: 99999,
-	},
-	TestDSN: &dsn{
-		Schema:  "information_schema",
-		Charset: "utf8mb4",
-		Disable: true,
-		Version: 99999,
-	},
+	OnlineDSN:               newDSN(nil),
+	TestDSN:                 newDSN(nil),
 	AllowOnlineAsTest:       false,
 	DropTestTemporary:       true,
 	CleanupTestDatabase:     false,
@@ -161,8 +152,6 @@ var Config = &Configuration{
 	Profiling:               false,
 	Trace:                   false,
 	Explain:                 true,
-	ConnTimeOut:             3,
-	QueryTimeOut:            30,
 	Delimiter:               ";",
 	MinCardinality:          0,
 
@@ -235,21 +224,106 @@ var Config = &Configuration{
 	MaxPrettySQLLength: 1024,
 }
 
-type dsn struct {
-	Addr   string `yaml:"addr"`
-	Schema string `yaml:"schema"`
+// Dsn Data source name
+type Dsn struct {
+	User             string            `yaml:"user"`               // Usernames
+	Password         string            `yaml:"password"`           // Password (requires User)
+	Net              string            `yaml:"net"`                // Network type
+	Addr             string            `yaml:"addr"`               // Network address (requires Net)
+	Schema           string            `yaml:"schema"`             // Database name
+	Charset          string            `yaml:"charset"`            // SET NAMES charset
+	Collation        string            `yaml:"collation"`          // Connection collation
+	Loc              string            `yaml:"loc"`                // Location for time.Time values
+	TLS              string            `yaml:"tls"`                // TLS configuration name
+	ServerPubKey     string            `yaml:"server-public-key"`  // Server public key name
+	MaxAllowedPacket int               `ymal:"max-allowed-packet"` // Max packet size allowed
+	Params           map[string]string `yaml:"params"`             // Other Connection parameters, `SET param=val`, `SET NAMES charset`
+	Timeout          int               `yaml:"timeout"`            // Dial timeout
+	ReadTimeout      int               `yaml:"read-timeout"`       // I/O read timeout
+	WriteTimeout     int               `yaml:"write-timeout"`      // I/O write timeout
 
-	// 数据库用户名和密码可以通过系统环境变量的形式赋值
-	User     string `yaml:"user"`
-	Password string `yaml:"password"`
-	Charset  string `yaml:"charset"`
-	Disable  bool   `yaml:"disable"`
+	AllowNativePasswords bool `yaml:"allow-native-passwords"` // Allows the native password authentication method
+	AllowOldPasswords    bool `yaml:"allow-old-passwords"`    // Allows the old insecure password method
 
-	Version int `yaml:"-"` // 版本自动检查，不可配置
+	Disable bool `yaml:"disable"`
+	Version int  `yaml:"-"` // 版本自动检查，不可配置
+}
+
+// newDSN create default Dsn struct
+func newDSN(cfg *mysql.Config) *Dsn {
+	dsn := &Dsn{
+		Net:                  "tcp",
+		Schema:               "information_schema",
+		Charset:              "utf8",
+		AllowNativePasswords: true,
+		Params:               make(map[string]string),
+		MaxAllowedPacket:     4 << 20, // 4 MiB
+
+		// Disable: true,
+		Version: 99999,
+	}
+	if cfg == nil {
+		return dsn
+	}
+	dsn.User = cfg.User
+	dsn.Password = cfg.Passwd
+	dsn.Net = cfg.Net
+	dsn.Addr = cfg.Addr
+	dsn.Schema = cfg.DBName
+	dsn.Params = make(map[string]string)
+	for k, v := range cfg.Params {
+		dsn.Params[k] = v
+	}
+	if _, ok := cfg.Params["charset"]; ok {
+		dsn.Charset = cfg.Params["charset"]
+	}
+	dsn.Collation = cfg.Collation
+	dsn.Loc = cfg.Loc.String()
+	dsn.MaxAllowedPacket = cfg.MaxAllowedPacket
+	dsn.ServerPubKey = cfg.ServerPubKey
+	dsn.TLS = cfg.TLSConfig
+	dsn.Timeout = int(cfg.Timeout / time.Second)
+	dsn.ReadTimeout = int(cfg.ReadTimeout / time.Second)
+	dsn.WriteTimeout = int(cfg.WriteTimeout / time.Second)
+	dsn.AllowNativePasswords = cfg.AllowNativePasswords
+	dsn.AllowOldPasswords = cfg.AllowOldPasswords
+	return dsn
+}
+
+// newMySQLConfig convert Dsn to go-sql-drive Config
+func (env *Dsn) newMySQLConifg() (*mysql.Config, error) {
+	var err error
+	dsn := mysql.NewConfig()
+
+	dsn.User = env.User
+	dsn.Passwd = env.Password
+	dsn.Net = env.Net
+	dsn.Addr = env.Addr
+	dsn.DBName = env.Schema
+	dsn.Params = make(map[string]string)
+	for k, v := range env.Params {
+		dsn.Params[k] = v
+	}
+	dsn.Params["charset"] = env.Charset
+	dsn.Collation = env.Collation
+	dsn.Loc, err = time.LoadLocation(env.Loc)
+	if err != nil {
+		return nil, err
+	}
+	dsn.MaxAllowedPacket = env.MaxAllowedPacket
+	dsn.ServerPubKey = env.ServerPubKey
+	dsn.TLSConfig = env.TLS
+	dsn.Timeout = time.Duration(env.Timeout) * time.Second
+	dsn.ReadTimeout = time.Duration(env.ReadTimeout) * time.Second
+	dsn.WriteTimeout = time.Duration(env.WriteTimeout) * time.Second
+	dsn.AllowNativePasswords = env.AllowNativePasswords
+	dsn.AllowOldPasswords = env.AllowOldPasswords
+	return dsn, err
 }
 
 // 解析命令行DSN输入
-func parseDSN(odbc string, d *dsn) *dsn {
+func parseDSN(odbc string, d *Dsn) *Dsn {
+	dsn := newDSN(nil)
 	var addr, user, password, schema, charset string
 	if odbc == FormatDSN(d) {
 		return d
@@ -267,7 +341,7 @@ func parseDSN(odbc string, d *dsn) *dsn {
 	// 设置为空表示禁用环境
 	odbc = strings.TrimSpace(odbc)
 	if odbc == "" {
-		return &dsn{Disable: true}
+		return &Dsn{Disable: true}
 	}
 
 	var userInfo, hostInfo, query string
@@ -289,9 +363,10 @@ func parseDSN(odbc string, d *dsn) *dsn {
 		userInfo = res[1]
 		hostInfo = res[2]
 		query = res[4]
-	} else {
+	} else if res := regexp.MustCompile(`^(.*?)($|\?)(.*)`).FindStringSubmatch(odbc); len(res) > 3 {
 		// hostInfo
-		hostInfo = odbc
+		hostInfo = res[1]
+		query = res[3]
 	}
 
 	// 解析用户信息
@@ -334,30 +409,39 @@ func parseDSN(odbc string, d *dsn) *dsn {
 		schema = "information_schema"
 	}
 
-	// 默认utf8mb4使用字符集
+	// 默认 utf8 使用字符集
 	if charset == "" {
-		charset = "utf8mb4"
+		charset = "utf8"
 	}
 
-	dsn := &dsn{
-		Addr:     addr,
-		User:     user,
-		Password: password,
-		Schema:   schema,
-		Charset:  charset,
-		Disable:  false,
-		Version:  999,
-	}
+	dsn.Addr = addr
+	dsn.User = user
+	dsn.Password = password
+	dsn.Schema = schema
+	dsn.Charset = charset
 	return dsn
 }
 
+// ParseDSN compatible with old version soar < 0.11.0
+func ParseDSN(odbc string, d *Dsn) *Dsn {
+	cfg, err := mysql.ParseDSN(odbc)
+	if err != nil {
+		// Log.Debug("go-sql-driver/mysql.ParseDSN Error: %s, DSN: %s, try to use old version parseDSN", err.Error(), odbc)
+		return parseDSN(odbc, d)
+	}
+	return newDSN(cfg)
+}
+
 // FormatDSN 格式化打印DSN
-func FormatDSN(env *dsn) string {
+func FormatDSN(env *Dsn) string {
 	if env == nil || env.Disable {
 		return ""
 	}
-	// username:password@ip:port/schema?charset=xxx
-	return fmt.Sprintf("%s:%s@%s/%s?charset=%s", env.User, env.Password, env.Addr, env.Schema, env.Charset)
+	dsn, err := env.newMySQLConifg()
+	if err != nil {
+		return ""
+	}
+	return dsn.FormatDSN()
 }
 
 // SoarVersion soar version information
@@ -479,8 +563,8 @@ func readCmdFlags() error {
 
 	_ = flag.String("config", "", "Config file path")
 	// +++++++++++++++测试环境+++++++++++++++++
-	onlineDSN := flag.String("online-dsn", FormatDSN(Config.OnlineDSN), "OnlineDSN, 线上环境数据库配置, username:password@ip:port/schema")
-	testDSN := flag.String("test-dsn", FormatDSN(Config.TestDSN), "TestDSN, 测试环境数据库配置, username:password@ip:port/schema")
+	onlineDSN := flag.String("online-dsn", FormatDSN(Config.OnlineDSN), "OnlineDSN, 线上环境数据库配置, username:password@tcp(ip:port)/schema")
+	testDSN := flag.String("test-dsn", FormatDSN(Config.TestDSN), "TestDSN, 测试环境数据库配置, username:password@tcp(ip:port)/schema")
 	allowOnlineAsTest := flag.Bool("allow-online-as-test", Config.AllowOnlineAsTest, "AllowOnlineAsTest, 允许线上环境也可以当作测试环境")
 	dropTestTemporary := flag.Bool("drop-test-temporary", Config.DropTestTemporary, "DropTestTemporary, 是否清理测试环境产生的临时库表")
 	cleanupTestDatabase := flag.Bool("cleanup-test-database", Config.CleanupTestDatabase, "单次运行清理历史1小时前残余的测试库。")
@@ -490,8 +574,7 @@ func readCmdFlags() error {
 	explain := flag.Bool("explain", Config.Explain, "Explain, 是否开启Explain执行计划分析")
 	sampling := flag.Bool("sampling", Config.Sampling, "Sampling, 数据采样开关")
 	samplingStatisticTarget := flag.Int("sampling-statistic-target", Config.SamplingStatisticTarget, "SamplingStatisticTarget, 数据采样因子，对应 PostgreSQL 的 default_statistics_target")
-	connTimeOut := flag.Int("conn-time-out", Config.ConnTimeOut, "ConnTimeOut, 数据库连接超时时间，单位秒")
-	queryTimeOut := flag.Int("query-time-out", Config.QueryTimeOut, "QueryTimeOut, 数据库SQL执行超时时间，单位秒")
+	samplingCondition := flag.String("sampling-condition", Config.SamplingCondition, "SamplingCondition, 数据采样条件，如： WHERE xxx LIMIT xxx")
 	delimiter := flag.String("delimiter", Config.Delimiter, "Delimiter, SQL分隔符")
 	minCardinality := flag.Float64("min-cardinality", Config.MinCardinality, "MinCardinality，索引列散粒度最低阈值，散粒度低于该值的列不添加索引，建议范围0.0 ~ 100.0")
 	// +++++++++++++++日志相关+++++++++++++++++
@@ -513,7 +596,7 @@ func readCmdFlags() error {
 	maxDistinctCount := flag.Int("max-distinct-count", Config.MaxDistinctCount, "MaxDistinctCount, 单条 SQL 中 Distinct 的最大数量")
 	maxIdxColsCount := flag.Int("max-index-cols-count", Config.MaxIdxColsCount, "MaxIdxColsCount, 复合索引中包含列的最大数量")
 	maxTextColsCount := flag.Int("max-text-cols-count", Config.MaxTextColsCount, "MaxTextColsCount, 表中含有的 text/blob 列的最大数量")
-	maxTotalRows := flag.Int64("max-total-rows", Config.MaxTotalRows, "MaxTotalRows, 计算散粒度时，当数据行数大于MaxTotalRows即开启数据库保护模式，不计算散粒度")
+	maxTotalRows := flag.Uint64("max-total-rows", Config.MaxTotalRows, "MaxTotalRows, 计算散粒度时，当数据行数大于MaxTotalRows即开启数据库保护模式，不计算散粒度")
 	maxQueryCost := flag.Int64("max-query-cost", Config.MaxQueryCost, "MaxQueryCost, last_query_cost 超过该值时将给予警告")
 	spaghettiQueryLength := flag.Int("spaghetti-query-length", Config.SpaghettiQueryLength, "SpaghettiQueryLength, SQL最大长度警告，超过该长度会给警告")
 	allowDropIdx := flag.Bool("allow-drop-index", Config.AllowDropIndex, "AllowDropIndex, 允许输出删除重复索引的建议")
@@ -564,8 +647,8 @@ func readCmdFlags() error {
 	}
 	flag.Parse()
 
-	Config.OnlineDSN = parseDSN(*onlineDSN, Config.OnlineDSN)
-	Config.TestDSN = parseDSN(*testDSN, Config.TestDSN)
+	Config.OnlineDSN = ParseDSN(*onlineDSN, Config.OnlineDSN)
+	Config.TestDSN = ParseDSN(*testDSN, Config.TestDSN)
 	Config.AllowOnlineAsTest = *allowOnlineAsTest
 	Config.DropTestTemporary = *dropTestTemporary
 	Config.CleanupTestDatabase = *cleanupTestDatabase
@@ -575,8 +658,8 @@ func readCmdFlags() error {
 	Config.Explain = *explain
 	Config.Sampling = *sampling
 	Config.SamplingStatisticTarget = *samplingStatisticTarget
-	Config.ConnTimeOut = *connTimeOut
-	Config.QueryTimeOut = *queryTimeOut
+	Config.SamplingCondition = *samplingCondition
+
 	Config.LogLevel = *logLevel
 
 	if filepath.IsAbs(*logOutput) || *logOutput == "" {

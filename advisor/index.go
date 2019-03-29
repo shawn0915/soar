@@ -18,6 +18,7 @@ package advisor
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/XiaoMi/soar/ast"
@@ -665,7 +666,7 @@ func (idxAdv *IndexAdvisor) buildIndex(idxList map[string]map[string][]*common.C
 				continue
 			}
 
-			idxName := "idx_" + strings.Join(colNames, "_")
+			idxName := common.Config.IdxPrefix + strings.Join(colNames, "_")
 
 			// 索引名称最大长度64
 			if len(idxName) > IndexNameMaxLength {
@@ -699,7 +700,7 @@ func (idxAdv *IndexAdvisor) buildIndexWithNoEnv(indexList map[string]map[string]
 					common.Log.Warn("can not get the meta info of column '%s'", col.Name)
 					continue
 				}
-				idxName := "idx_" + col.Name
+				idxName := common.Config.IdxPrefix + col.Name
 				// 库、表、列名需要用反撇转义
 				alterSQL := fmt.Sprintf("alter table `%s`.`%s` add index `%s` (`%s`)", idxAdv.vEnv.RealDB(col.DB), col.Table, idxName, col.Name)
 				if col.DB == "" {
@@ -793,7 +794,6 @@ func CompleteColumnsInfo(stmt sqlparser.Statement, cols []*common.Column, env *e
 				if find {
 					break
 				}
-
 			}
 
 			// 如果不依赖env环境，利用ast中包含的信息推理列的库表信息
@@ -912,7 +912,7 @@ func (idxAdv *IndexAdvisor) calcCardinality(cols []*common.Column) []*common.Col
 				// 如果是不存在的表就会报错，报错的可能性有三个：
 				// 1.数据库错误  2.表不存在  3.临时表
 				// 而这三种错误都是不需要在这一层关注的，直接跳过
-				common.Log.Debug("calcCardinality error: %v", err)
+				common.Log.Warn("calcCardinality error: %v", err)
 				continue
 			}
 
@@ -922,7 +922,7 @@ func (idxAdv *IndexAdvisor) calcCardinality(cols []*common.Column) []*common.Col
 
 		// 检查对应列是否为主键或单列唯一索引，如果满足直接返回1，不再重复计算，提高效率
 		// 多列复合唯一索引不能跳过计算，单列普通索引不能跳过计算
-		for _, index := range idxAdv.IndexMeta[realDB][col.Table].IdxRows {
+		for _, index := range idxAdv.IndexMeta[realDB][col.Table].Rows {
 			// 根据索引的名称判断该索引包含的列数，列数大于1即为复合索引
 			columnCount := len(idxAdv.IndexMeta[realDB][col.Table].FindIndex(database.IndexKeyName, index.KeyName))
 			if col.Name == index.ColumnName {
@@ -979,7 +979,7 @@ func (idxAdvs IndexAdvises) Format() map[string]Rule {
 			if common.Config.Sampling {
 				cardinal := fmt.Sprintf("%0.2f", col.Cardinality*100)
 				if cardinal != "0.00" {
-					rules[advKey].Content += fmt.Sprintf("为列%s添加索引,散粒度为: %s%%; ",
+					rules[advKey].Content += fmt.Sprintf("为列%s添加索引，散粒度为: %s%%; ",
 						col.Name, cardinal)
 				}
 			} else {
@@ -990,7 +990,13 @@ func (idxAdvs IndexAdvises) Format() map[string]Rule {
 		rules[advKey].Content = strings.Trim(rules[advKey].Content, common.Config.Delimiter)
 	}
 
+	var sortAdvs []string
 	for adv := range rules {
+		sortAdvs = append(sortAdvs, adv)
+	}
+	sort.Strings(sortAdvs)
+
+	for _, adv := range sortAdvs {
 		key := fmt.Sprintf("IDX.%03d", number)
 		ddl := ast.MergeAlterTables(sqls[adv]...)
 		// 由于传入合并的SQL都是一张表的，所以一定只会输出一条ddl语句
@@ -1088,7 +1094,7 @@ func DuplicateKeyChecker(conn *database.Connector, databases ...string) map[stri
 			}
 
 			// 枚举所有的索引信息，提取用到的列
-			for _, idx := range idxInfo.IdxRows {
+			for _, idx := range idxInfo.Rows {
 				if _, ok := idxMap[idx.KeyName]; !ok {
 					idxMap[idx.KeyName] = make([]*common.Column, 0)
 					for _, col := range idxInfo.FindIndex(database.IndexKeyName, idx.KeyName) {

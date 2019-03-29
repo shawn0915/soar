@@ -17,6 +17,7 @@
 package ast
 
 import (
+	"flag"
 	"fmt"
 	"testing"
 
@@ -26,7 +27,25 @@ import (
 	"vitess.io/vitess/go/vt/sqlparser"
 )
 
+var update = flag.Bool("update", false, "update .golden files")
+
+func TestMain(m *testing.M) {
+	// 初始化 init
+	common.BaseDir = common.DevPath
+	err := common.ParseConfig("")
+	common.LogIfError(err, "init ParseConfig")
+	common.Log.Debug("ast_test init")
+
+	// 分割线
+	flag.Parse()
+	m.Run()
+
+	// 环境清理
+	//
+}
+
 func TestGetTableFromExprs(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	tbExprs := sqlparser.TableExprs{
 		&sqlparser.AliasedTableExpr{
 			Expr: sqlparser.TableName{
@@ -40,9 +59,11 @@ func TestGetTableFromExprs(t *testing.T) {
 	if tb, ok := meta["db"]; !ok {
 		t.Errorf("no table qualifier, meta: %s", pretty.Sprint(tb))
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestGetParseTableWithStmt(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	for _, sql := range common.TestSQLs {
 		fmt.Println(sql)
 		stmt, err := sqlparser.Parse(sql)
@@ -53,9 +74,11 @@ func TestGetParseTableWithStmt(t *testing.T) {
 		pretty.Println(meta)
 		fmt.Println()
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFindCondition(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	for _, sql := range common.TestSQLs {
 		fmt.Println(sql)
 		stmt, err := sqlparser.Parse(sql)
@@ -71,9 +94,11 @@ func TestFindCondition(t *testing.T) {
 		pretty.Println(inEq)
 		fmt.Println()
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFindGroupBy(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	sqlList := []string{
 		"select a from t group by c",
 	}
@@ -88,9 +113,11 @@ func TestFindGroupBy(t *testing.T) {
 		pretty.Println(res)
 		fmt.Println()
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFindOrderBy(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	sqlList := []string{
 		"select a from t group by c order by d, c desc",
 		"select a from t group by c order by d desc",
@@ -106,9 +133,11 @@ func TestFindOrderBy(t *testing.T) {
 		pretty.Println(res)
 		fmt.Println()
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFindSubquery(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	sqlList := []string{
 		"SELECT * FROM t1 WHERE column1 = (SELECT column1 FROM (SELECT column1 FROM t2) a);",
 		"select column1 from t2",
@@ -127,10 +156,11 @@ func TestFindSubquery(t *testing.T) {
 		fmt.Println(len(subquery))
 		pretty.Println(subquery)
 	}
-
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFindJoinTable(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	sqlList := []string{
 		"SELECT * FROM t1 LEFT JOIN (t2 CROSS JOIN t3 CROSS JOIN t4) ON (t2.a = t1.a AND t3.b = t1.b AND t4.c = t1.c)",
 		"select ID,name from (select address from customer_list where SID=1 order by phone limit 50,10) a join customer_list l on (a.address=l.address) join city c on (c.city=l.city) order by phone desc;",
@@ -151,9 +181,11 @@ func TestFindJoinTable(t *testing.T) {
 		joinMeta := FindJoinTable(stmt, nil)
 		pretty.Println(joinMeta)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFindJoinCols(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	sqlList := []string{
 		"SELECT * FROM t1 LEFT JOIN (t2 CROSS JOIN t3 CROSS JOIN t4) ON (t2.a = t1.a AND t3.b = t1.b AND t4.c = t1.c)",
 		"select t from a LEFT JOIN b USING (c1, c2, c3)",
@@ -175,9 +207,11 @@ func TestFindJoinCols(t *testing.T) {
 		columns := FindJoinCols(stmt)
 		pretty.Println(columns)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFindJoinColBeWhereEQ(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	sqlList := []string{
 		"select ID,name from (select address from customer_list where SID=1 order by phone limit 50,10) a join customer_list l on (a.address=l.address) join city c on (c.city=l.city) order by phone desc;",
 		"SELECT * FROM t1 LEFT JOIN (t2, t3, t4) ON (t2.a = t1.a AND t3.b = t1.b AND t4.c = t1.c)",
@@ -197,9 +231,11 @@ func TestFindJoinColBeWhereEQ(t *testing.T) {
 		columns := FindEQColsInJoinCond(stmt)
 		pretty.Println(columns)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFindJoinColBeWhereINEQ(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	sqlList := []string{
 		"select ID,name from (select address from customer_list where SID=1 order by phone limit 50,10) a join customer_list l on (a.address=l.address) join city c on (c.city=l.city) order by phone desc;",
 		"SELECT * FROM t1 LEFT JOIN (t2, t3, t4) ON (t2.a = t1.a AND t3.b = t1.b AND t4.c = t1.c)",
@@ -219,9 +255,11 @@ func TestFindJoinColBeWhereINEQ(t *testing.T) {
 		columns := FindINEQColsInJoinCond(stmt)
 		pretty.Println(columns)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFindAllCondition(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	sqlList := []string{
 		"SELECT * FROM t1 LEFT JOIN (t2 CROSS JOIN t3 CROSS JOIN t4) ON (t2.a = t1.a AND t3.b = t1.b AND t4.c = t1.c)",
 		"select t from a LEFT JOIN b USING (c1, c2, c3)",
@@ -247,9 +285,11 @@ func TestFindAllCondition(t *testing.T) {
 		columns := FindAllCondition(stmt)
 		pretty.Println(columns)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFindColumn(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	sqlList := []string{
 		"select col, col2, sum(col1) from tb group by col",
 		"select col from tb group by col,sum(col1)",
@@ -266,9 +306,11 @@ func TestFindColumn(t *testing.T) {
 		columns := FindColumn(stmt)
 		pretty.Println(columns)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFindAllCols(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	sqlList := []string{
 		"select * from tb where a = '1' order by c",
 		"select * from tb where a = '1' group by c",
@@ -296,9 +338,11 @@ func TestFindAllCols(t *testing.T) {
 			t.Error(fmt.Errorf("want 'c' got %v", columns))
 		}
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestGetSubqueryDepth(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	sqlList := []string{
 		"SELECT * FROM t1 LEFT JOIN (t2 CROSS JOIN t3 CROSS JOIN t4) ON (t2.a = t1.a AND t3.b = t1.b AND t4.c = t1.c)",
 		"select t from a LEFT JOIN b USING (c1, c2, c3)",
@@ -323,9 +367,11 @@ func TestGetSubqueryDepth(t *testing.T) {
 		dep := GetSubqueryDepth(stmt)
 		fmt.Println(dep)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestAppendTable(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	sqlList := []string{
 		"select ID,name from (select address from customer_list where SID=1 order by phone limit 50,10) a join customer_list l on (a.address=l.address) join city c on (c.city=l.city) order by phone desc;",
 	}
@@ -367,4 +413,5 @@ func TestAppendTable(t *testing.T) {
 	if meta[""].Table["customer_list"].TableAliases[0] != "l" || meta[""].Table["city"].TableAliases[0] != "c" {
 		t.Error("alias filed\n", pretty.Sprint(meta))
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }

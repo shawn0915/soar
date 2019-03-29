@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -66,9 +67,9 @@ var ExplainType = map[string]int{
 type ExplainInfo struct {
 	SQL           string
 	ExplainFormat int
-	ExplainRows   []*ExplainRow
+	ExplainRows   []ExplainRow
 	ExplainJSON   *ExplainJSON
-	Warnings      []*ExplainWarning
+	Warnings      []ExplainWarning
 	QueryCost     float64
 }
 
@@ -267,6 +268,7 @@ var ExplainKeyWords = []string{
 	"using_temporary_table",
 }
 
+/*
 // ExplainColumnIndent EXPLAIN表头
 var ExplainColumnIndent = map[string]string{
 	"id":            "id为SELECT的标识符. 它是在SELECT查询中的顺序编号. 如果这一行表示其他行的union结果, 这个值可以为空. 在这种情况下, table列会显示为形如<union M,N>, 表示它是id为M和N的查询行的联合结果.",
@@ -281,6 +283,7 @@ var ExplainColumnIndent = map[string]string{
 	"filtered":      "表示返回结果的行占需要读到的行(rows列的值)的百分比.",
 	"Extra":         "该列显示MySQL在查询过程中的一些详细信息, MySQL查询优化器执行查询的过程中对查询计划的重要补充信息.",
 }
+*/
 
 // ExplainSelectType EXPLAIN中SELECT TYPE会出现的类型
 var ExplainSelectType = map[string]string{
@@ -300,14 +303,14 @@ var ExplainSelectType = map[string]string{
 // ExplainAccessType EXPLAIN中ACCESS TYPE会出现的类型
 var ExplainAccessType = map[string]string{
 	"system":          "这是const连接类型的一种特例, 该表仅有一行数据(=系统表).",
-	"const":           `const用于使用常数值比较PRIMARY KEY时, 当查询的表仅有一行时, 使用system. 例:SELECT * FROM tbl WHERE col =1.`,
-	"eq_ref":          `除const类型外最好的可能实现的连接类型. 它用在一个索引的所有部分被连接使用并且索引是UNIQUE或PRIMARY KEY, 对于每个索引键, 表中只有一条记录与之匹配. 例:'SELECT * FROM ref_table,tbl WHERE ref_table.key_column=tbl.column;'.`,
+	"const":           `const用于使用常数值比较PRIMARY KEY时, 当查询的表仅有一行时, 使用system. 例:SELECT * FROM tbl WHERE col = 1.`,
+	"eq_ref":          `除const类型外最好的可能实现的连接类型. 它用在一个索引的所有部分被连接使用并且索引是UNIQUE或PRIMARY KEY, 对于每个索引键, 表中只有一条记录与之匹配. 例: 'SELECT * FROM RefTbl, tbl WHERE RefTbl.col=tbl.col;'.`,
 	"ref":             `连接不能基于关键字选择单个行, 可能查找到多个符合条件的行. 叫做ref是因为索引要跟某个参考值相比较. 这个参考值或者是一个数, 或者是来自一个表里的多表查询的结果值. 例:'SELECT * FROM tbl WHERE idx_col=expr;'.`,
 	"fulltext":        "查询时使用 FULLTEXT 索引.",
 	"ref_or_null":     "如同ref, 但是MySQL必须在初次查找的结果里找出null条目, 然后进行二次查找.",
 	"index_merge":     `表示使用了索引合并优化方法. 在这种情况下. key列包含了使用的索引的清单, key_len包含了使用的索引的最长的关键元素. 详情请见 8.2.1.4, “Index Merge Optimization”.`,
-	"unique_subquery": `在某些IN查询中使用此种类型，而不是常规的ref:'value IN (SELECT primary_key FROM single_table WHERE some_expr)'.`,
-	"index_subquery":  "在某些IN查询中使用此种类型, 与unique_subquery类似, 但是查询的是非唯一索引性索引.",
+	"unique_subquery": `在某些IN查询中使用此种类型，而不是常规的ref:'value IN (SELECT PrimaryKey FROM SingleTable WHERE SomeExpr)'.`,
+	"index_subquery":  "在某些IN查询中使用此种类型, 与 unique_subquery 类似, 但是查询的是非唯一索引性索引.",
 	"range":           `只检索给定范围的行, 使用一个索引来选择行. key列显示使用了哪个索引. key_len包含所使用索引的最长关键元素.`,
 	"index":           "全表扫描, 只是扫描表的时候按照索引次序进行而不是行. 主要优点就是避免了排序, 但是开销仍然非常大.",
 	"ALL":             `最坏的情况, 从头到尾全表扫描.`,
@@ -417,12 +420,12 @@ func findTablesInJSON(explainJSON string, depth int) {
 }
 
 // FormatJSONIntoTraditional 将JSON形式转换为TRADITIONAL形式，方便前端展现
-func FormatJSONIntoTraditional(explainJSON string) []*ExplainRow {
+func FormatJSONIntoTraditional(explainJSON string) []ExplainRow {
 	// 查找JSON中的所有ExplainJSONTable
 	explainJSONTables = []*ExplainJSONTable{}
 	findTablesInJSON(explainJSON, 0)
 
-	var explainRows []*ExplainRow
+	var explainRows []ExplainRow
 	id := -1
 	for _, table := range explainJSONTables {
 		keyLen := table.KeyLength
@@ -433,7 +436,7 @@ func FormatJSONIntoTraditional(explainJSON string) []*ExplainRow {
 		if filtered > 100.00 {
 			filtered = 100.00
 		}
-		explainRows = append(explainRows, &ExplainRow{
+		explainRows = append(explainRows, ExplainRow{
 			ID:           id + 1,
 			SelectType:   "",
 			TableName:    table.TableName,
@@ -454,7 +457,7 @@ func FormatJSONIntoTraditional(explainJSON string) []*ExplainRow {
 
 // ConvertExplainJSON2Row 将 JSON 格式转成 ROW 格式，为方便统一做优化建议
 // 但是会损失一些 JSON 特有的分析结果
-func ConvertExplainJSON2Row(explainJSON *ExplainJSON) []*ExplainRow {
+func ConvertExplainJSON2Row(explainJSON *ExplainJSON) []ExplainRow {
 	buf, err := json.Marshal(explainJSON)
 	if err != nil {
 		return nil
@@ -554,15 +557,15 @@ func (db *Connector) explainAbleSQL(sql string) (string, error) {
 	return "", nil
 }
 
-// 执行explain请求，返回mysql.Result执行结果
-func (db *Connector) executeExplain(sql string, explainType int, formatType int) (*QueryResult, error) {
+// explainQuery 生成可执行的 explain 查询请求
+func (db *Connector) explainQuery(sql string, explainType int, formatType int) string {
 	var err error
 	sql, err = db.explainAbleSQL(sql)
-	if sql == "" {
-		return nil, err
+	if sql == "" || err != nil {
+		return sql
 	}
 
-	// 5.6以上支持FORMAT=JSON
+	// 5.6以上支持 FORMAT=JSON
 	explainFormat := ""
 	switch formatType {
 	case JSONFormatExplain:
@@ -570,23 +573,23 @@ func (db *Connector) executeExplain(sql string, explainType int, formatType int)
 			explainFormat = "FORMAT=JSON"
 		}
 	}
-	// 执行explain
-	var res *QueryResult
+
+	// 执行 explain
 	switch explainType {
 	case ExtendedExplainType:
 		// 5.6以上extended关键字已经不推荐使用，8.0废弃了这个关键字
 		if common.Config.TestDSN.Version >= 50600 {
-			res, err = db.Query("explain %s", sql)
+			sql = fmt.Sprintf("explain %s", sql)
 		} else {
-			res, err = db.Query("explain extended %s", sql)
+			sql = fmt.Sprintf("explain extended %s", sql)
 		}
 	case PartitionsExplainType:
-		res, err = db.Query("explain partitions %s", sql)
+		sql = fmt.Sprintf("explain partitions %s", sql)
 
 	default:
-		res, err = db.Query("explain %s %s", explainFormat, sql)
+		sql = fmt.Sprintf("explain %s %s", explainFormat, sql)
 	}
-	return res, err
+	return sql
 }
 
 // MySQLExplainWarnings WARNINGS信息中包含的优化器信息
@@ -602,6 +605,9 @@ func MySQLExplainWarnings(exp *ExplainInfo) string {
 // MySQLExplainQueryCost 将last_query_cost信息补充到评审结果中
 func MySQLExplainQueryCost(exp *ExplainInfo) string {
 	var content string
+	if exp == nil {
+		return content
+	}
 	if exp.QueryCost > 0 {
 
 		tmp := fmt.Sprintf("%.3f\n", exp.QueryCost)
@@ -647,6 +653,7 @@ func ExplainInfoTranslator(exp *ExplainInfo) string {
 	}
 	if len(selectTypeBuf) > 0 {
 		buf = append(buf, fmt.Sprint("#### SelectType信息解读\n"))
+		sort.Strings(selectTypeBuf)
 		buf = append(buf, strings.Join(selectTypeBuf, "\n"))
 	}
 
@@ -676,6 +683,7 @@ func ExplainInfoTranslator(exp *ExplainInfo) string {
 	}
 	if len(accessTypeBuf) > 0 {
 		buf = append(buf, fmt.Sprint("#### Type信息解读\n"))
+		sort.Strings(accessTypeBuf)
 		buf = append(buf, strings.Join(accessTypeBuf, "\n"))
 	}
 
@@ -688,10 +696,11 @@ func ExplainInfoTranslator(exp *ExplainInfo) string {
 		for _, row := range rows {
 			for k, c := range explainExtra {
 				if strings.Contains(row.Extra, k) {
-					if k == "Impossible WHERE" {
-						if strings.Contains(row.Extra, "Impossible WHERE noticed after reading const tables") {
-							continue
-						}
+					if k == "Impossible WHERE" && strings.Contains(row.Extra, "Impossible WHERE noticed after reading const tables") {
+						continue
+					}
+					if k == "Using index" && strings.Contains(row.Extra, "Using index condition") {
+						continue
 					}
 					warn := false
 					for _, w := range common.Config.ExplainWarnExtra {
@@ -711,6 +720,7 @@ func ExplainInfoTranslator(exp *ExplainInfo) string {
 	}
 	if len(extraTypeBuf) > 0 {
 		buf = append(buf, fmt.Sprint("#### Extra信息解读\n"))
+		sort.Strings(extraTypeBuf)
 		buf = append(buf, strings.Join(extraTypeBuf, "\n"))
 	}
 
@@ -746,7 +756,7 @@ func ParseExplainText(content string) (exp *ExplainInfo, err error) {
 }
 
 // 解析文本形式传统形式Explain信息
-func parseTraditionalExplainText(content string) (explainRows []*ExplainRow, err error) {
+func parseTraditionalExplainText(content string) (explainRows []ExplainRow, err error) {
 	LS := regexp.MustCompile(`^\+`) // 华丽的分隔线:)
 
 	// 格式正确性检查
@@ -817,12 +827,12 @@ func parseTraditionalExplainText(content string) (explainRows []*ExplainRow, err
 		}
 		// filtered may larger than 100.00
 		// https://bugs.mysql.com/bug.php?id=34124
-		if filtered > 100.00 {
+		if filtered >= 100.00 {
 			filtered = 100.00
 		}
 
 		// 拼接结构体
-		explainRows = append(explainRows, &ExplainRow{
+		explainRows = append(explainRows, ExplainRow{
 			ID:           id,
 			SelectType:   colsMap["select_type"],
 			TableName:    colsMap["table"],
@@ -842,9 +852,9 @@ func parseTraditionalExplainText(content string) (explainRows []*ExplainRow, err
 }
 
 // 解析文本形式竖排版 Explain信息
-func parseVerticalExplainText(content string) (explainRows []*ExplainRow, err error) {
+func parseVerticalExplainText(content string) (explainRows []ExplainRow, err error) {
 	var lines []string
-	explainRow := &ExplainRow{
+	explainRow := ExplainRow{
 		Partitions: "NULL",
 		Filtered:   0.00,
 	}
@@ -928,77 +938,105 @@ func parseJSONExplainText(content string) (*ExplainJSON, error) {
 }
 
 // ParseExplainResult 分析 mysql 执行 explain 的结果，返回 ExplainInfo 结构化数据
-func ParseExplainResult(res *QueryResult, formatType int) (exp *ExplainInfo, err error) {
+func ParseExplainResult(res QueryResult, formatType int) (exp *ExplainInfo, err error) {
 	exp = &ExplainInfo{
 		ExplainFormat: formatType,
 	}
 	// JSON 格式直接调用文本方式解析
 	if formatType == JSONFormatExplain {
-		exp.ExplainJSON, err = parseJSONExplainText(res.Rows[0].Str(0))
+		if res.Rows.Next() {
+			var explainString string
+			err = res.Rows.Scan(&explainString)
+			if err != nil {
+				common.Log.Debug(err.Error())
+			}
+			exp.ExplainJSON, err = parseJSONExplainText(explainString)
+		}
+		res.Rows.Close()
 		return exp, err
 	}
 
-	// 生成表头
-	colIdx := make(map[int]string)
-	for i, f := range res.Result.Fields() {
-		colIdx[i] = strings.ToLower(f.Name)
+	/*
+		+----+-------------+-------+------------+------+---------------+------+---------+------+------+----------+-------+
+		| id | select_type | table | partitions | type | possible_keys | key  | key_len | ref  | rows | filtered | Extra |
+		+----+-------------+-------+------------+------+---------------+------+---------+------+------+----------+-------+
+		|  1 | SIMPLE      | film  | NULL       | ALL  | NULL          | NULL | NULL    | NULL | 1000 |   100.00 | NULL  |
+		+----+-------------+-------+------------+------+---------------+------+---------+------+------+----------+-------+
+	*/
+
+	// Different MySQL version has different columns define
+	var selectType, table, partitions, accessType, possibleKeys, key, keyLen, ref, extra []byte
+	expRow := ExplainRow{}
+	explainFields := make([]interface{}, 0)
+	fields := map[string]interface{}{
+		"id":            &expRow.ID,
+		"select_type":   &selectType,
+		"table":         &table,
+		"partitions":    &partitions,
+		"type":          &accessType,
+		"possible_keys": &possibleKeys,
+		"key":           &key,
+		"key_len":       &keyLen,
+		"ref":           &ref,
+		"rows":          &expRow.Rows,
+		"filtered":      &expRow.Filtered,
+		"Extra":         &extra,
 	}
+	cols, err := res.Rows.Columns()
+	common.LogIfError(err, "")
+	var colByPass []byte
+	for _, col := range cols {
+		if _, ok := fields[col]; ok {
+			explainFields = append(explainFields, fields[col])
+		} else {
+			common.Log.Debug("ParseExplainResult by pass column %s", col)
+			explainFields = append(explainFields, &colByPass)
+		}
+	}
+
 	// 补全 ExplainRows
-	var explainrows []*ExplainRow
-	for _, row := range res.Rows {
-		expRow := &ExplainRow{Partitions: "NULL", Filtered: 0.00}
-		// list 到 map 的转换
-		for i := range row {
-			switch colIdx[i] {
-			case "id":
-				expRow.ID = row.ForceInt(i)
-			case "select_type":
-				expRow.SelectType = row.Str(i)
-			case "table":
-				expRow.TableName = row.Str(i)
-				if expRow.TableName == "" {
-					expRow.TableName = "NULL"
-				}
-			case "type":
-				expRow.AccessType = row.Str(i)
-				if expRow.AccessType == "" {
-					expRow.AccessType = "NULL"
-				}
-				expRow.Scalability = ExplainScalability[expRow.AccessType]
-			case "possible_keys":
-				expRow.PossibleKeys = strings.Split(row.Str(i), ",")
-			case "key":
-				expRow.Key = row.Str(i)
-				if expRow.Key == "" {
-					expRow.Key = "NULL"
-				}
-			case "key_len":
-				expRow.KeyLen = row.Str(i)
-			case "ref":
-				expRow.Ref = strings.Split(row.Str(i), ",")
-			case "rows":
-				expRow.Rows = row.ForceInt(i)
-			case "extra":
-				expRow.Extra = row.Str(i)
-				if expRow.Extra == "" {
-					expRow.Extra = "NULL"
-				}
-			case "filtered":
-				expRow.Filtered = row.ForceFloat(i)
-				// MySQL bug: https://bugs.mysql.com/bug.php?id=34124
-				if expRow.Filtered > 100.00 {
-					expRow.Filtered = 100.00
-				}
+	var explainRows []ExplainRow
+	for res.Rows.Next() {
+		err := res.Rows.Scan(explainFields...)
+		if err != nil {
+			common.Log.Warn(err.Error())
+		}
+		expRow.SelectType = NullString(selectType)
+		expRow.TableName = NullString(table)
+		expRow.Partitions = NullString(partitions)
+		expRow.AccessType = NullString(accessType)
+		expRow.PossibleKeys = strings.Split(NullString(possibleKeys), ",")
+		expRow.Key = NullString(key)
+		expRow.KeyLen = NullString(keyLen)
+		expRow.Ref = strings.Split(NullString(ref), ",")
+		expRow.Extra = NullString(extra)
+
+		// MySQL bug: https://bugs.mysql.com/bug.php?id=34124
+		if expRow.Filtered > 100.00 {
+			expRow.Filtered = 100.00
+		}
+
+		expRow.Scalability = ExplainScalability[expRow.AccessType]
+		explainRows = append(explainRows, expRow)
+	}
+	res.Rows.Close()
+	exp.ExplainRows = explainRows
+
+	// check explain warning info
+	if common.Config.ShowWarnings {
+		for res.Warning.Next() {
+			var expWarning ExplainWarning
+			err = res.Warning.Scan(&expWarning.Level, &expWarning.Code, &expWarning.Message)
+			if err != nil {
+				break
+			}
+
+			// 'EXTENDED' is deprecated and will be removed in a future release.
+			if expWarning.Code != 1681 {
+				exp.Warnings = append(exp.Warnings, expWarning)
 			}
 		}
-		explainrows = append(explainrows, expRow)
-	}
-	exp.ExplainRows = explainrows
-	for _, w := range res.Warning {
-		// 'EXTENDED' is deprecated and will be removed in a future release.
-		if w.Int(1) != 1681 {
-			exp.Warnings = append(exp.Warnings, &ExplainWarning{Level: w.Str(0), Code: w.Int(1), Message: w.Str(2)})
-		}
+		res.Warning.Close()
 	}
 
 	// 添加 last_query_cost
@@ -1013,6 +1051,7 @@ func (db *Connector) Explain(sql string, explainType int, formatType int) (exp *
 	if explainType != TraditionalExplainType {
 		formatType = TraditionalFormatExplain
 	}
+
 	defer func() {
 		if e := recover(); e != nil {
 			const size = 4096
@@ -1024,14 +1063,17 @@ func (db *Connector) Explain(sql string, explainType int, formatType int) (exp *
 	}()
 
 	// 执行EXPLAIN请求
-	res, err := db.executeExplain(sql, explainType, formatType)
-	if err != nil || res == nil {
+	exp.SQL = db.explainQuery(sql, explainType, formatType)
+	if exp.SQL == "" {
+		return exp, nil
+	}
+	res, err := db.Query(exp.SQL)
+	if err != nil {
 		return exp, err
 	}
 
 	// 解析mysql结果，输出ExplainInfo
 	exp, err = ParseExplainResult(res, formatType)
-
 	return exp, err
 }
 

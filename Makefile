@@ -17,7 +17,14 @@ LDFLAGS=-ldflags="-s -w"
 BUILD_TIME=`date +%Y%m%d%H%M`
 COMMIT_VERSION=`git rev-parse HEAD`
 
+# colors compatible setting
+CRED:=$(shell tput setaf 1 2>/dev/null)
+CGREEN:=$(shell tput setaf 2 2>/dev/null)
+CYELLOW:=$(shell tput setaf 3 2>/dev/null)
+CEND:=$(shell tput sgr0 2>/dev/null)
+
 # Add mysql version for testing `MYSQL_RELEASE=percona MYSQL_VERSION=5.7 make docker`
+# MySQL 5.1 `MYSQL_RELEASE=vsamov/mysql-5.1.73 make docker`
 # MYSQL_RELEASE: mysql, percona, mariadb ...
 # MYSQL_VERSION: latest, 8.0, 5.7, 5.6, 5.5 ...
 # use mysql:latest as default
@@ -33,7 +40,7 @@ GO_VERSION_MIN=1.10
 # that allows the three components to be checked in a single comparison.
 VER_TO_INT:=awk '{split(substr($$0, match ($$0, /[0-9\.]+/)), a, "."); print a[1]*10000+a[2]*100+a[3]}'
 go_version_check:
-	@echo "\033[92mGo version check\033[0m"
+	@echo "$(CGREEN)Go version check ...$(CEND)"
 	@if test $(shell go version | $(VER_TO_INT) ) -lt \
   	$(shell echo "$(GO_VERSION_MIN)" | $(VER_TO_INT)); \
   	then printf "go version $(GO_VERSION_MIN)+ required, found: "; go version; exit 1; \
@@ -42,7 +49,7 @@ go_version_check:
 # Dependency check
 .PHONY: deps
 deps:
-	@echo "\033[92mDependency check\033[0m"
+	@echo "$(CGREEN)Dependency check ...$(CEND)"
 	@bash ./deps.sh
 	# The retool tools.json is setup from retool-install.sh
 	# some packages download need more open internet access
@@ -52,7 +59,7 @@ deps:
 # Code format
 .PHONY: fmt
 fmt: go_version_check
-	@echo "\033[92mRun gofmt on all source files ...\033[0m"
+	@echo "$(CGREEN)Run gofmt on all source files ...$(CEND)"
 	@echo "gofmt -l -s -w ..."
 	@ret=0 && for d in $$(go list -f '{{.Dir}}' ./... | grep -v /vendor/); do \
 		gofmt -l -s -w $$d/*.go || ret=$$? ; \
@@ -61,35 +68,44 @@ fmt: go_version_check
 # Run golang test cases
 .PHONY: test
 test:
-	@echo "\033[92mRun all test cases ...\033[0m"
-	go test ./...
+	@echo "$(CGREEN)Run all test cases ...$(CEND)"
+	go test -timeout 10m -race ./...
 	@echo "test Success!"
 
 # Rule golang test cases with `-update` flag
+.PHONY: test-update
 test-update:
-	@echo "\033[92mRun all test cases with -update flag ...\033[0m"
+	@echo "$(CGREEN)Run all test cases with -update flag ...$(CEND)"
 	go test ./... -update
 	@echo "test-update Success!"
+
+# Using bats test framework run all cli test cases
+# https://github.com/sstephenson/bats
+.PHONY: test-cli
+test-cli: build
+	@echo "$(CGREEN)Run all cli test cases ...$(CEND)"
+	bats ./test
+	@echo "test-cli Success!"
 
 # Code Coverage
 # colorful coverage numerical >=90% GREEN, <80% RED, Other YELLOW
 .PHONY: cover
 cover: test
-	@echo "\033[92mRun test cover check ...\033[0m"
+	@echo "$(CGREEN)Run test cover check ...$(CEND)"
 	go test -coverpkg=./... -coverprofile=coverage.data ./... | column -t
 	go tool cover -html=coverage.data -o coverage.html
 	go tool cover -func=coverage.data -o coverage.txt
 	@tail -n 1 coverage.txt | awk '{sub(/%/, "", $$NF); \
 		if($$NF < 80) \
-			{print "\033[91m"$$0"%\033[0m"} \
+			{print "$(CRED)"$$0"%$(CEND)"} \
 		else if ($$NF >= 90) \
-			{print "\033[92m"$$0"%\033[0m"} \
+			{print "$(CGREEN)"$$0"%$(CEND)"} \
 		else \
-			{print "\033[93m"$$0"%\033[0m"}}'
+			{print "$(CYELLOW)"$$0"%$(CEND)"}}'
 
 # Builds the project
 build: fmt
-	@echo "\033[92mBuilding ...\033[0m"
+	@echo "$(CGREEN)Building ...$(CEND)"
 	@mkdir -p bin
 	@bash ./genver.sh
 	@ret=0 && for d in $$(go list -f '{{if (eq .Name "main")}}{{.ImportPath}}{{end}}' ./...); do \
@@ -100,14 +116,14 @@ build: fmt
 
 # Installs our project: copies binaries
 install: build
-	@echo "\033[92mInstall ...\033[0m"
+	@echo "$(CGREEN)Install ...$(CEND)"
 	go install ./...
 	@echo "install Success!"
 
 # Generate doc use -list* command
 .PHONY: doc
 doc: build
-	@echo "\033[92mAuto generate doc ...\033[0m"
+	@echo "$(CGREEN)Auto generate doc ...$(CEND)"
 	./bin/soar -list-heuristic-rules > doc/heuristic.md
 	./bin/soar -list-rewrite-rules > doc/rewrite.md
 	./bin/soar -list-report-types > doc/report_type.md
@@ -115,37 +131,36 @@ doc: build
 # Add or change a heuristic rule
 .PHONY: heuristic
 heuristic: doc
-	@echo "\033[92mUpdate Heuristic rule golden files ...\033[0m"
+	@echo "$(CGREEN)Update Heuristic rule golden files ...$(CEND)"
 	go test github.com/XiaoMi/soar/advisor -v -update -run TestListHeuristicRules
 	go test github.com/XiaoMi/soar/advisor -v -update -run TestMergeConflictHeuristicRules
+	docker stop soar-mysql 2>/dev/null || true
 
 # Update vitess vendor
 .PHONY: vitess
 vitess:
-	@echo "\033[92mUpdate vitess deps ...\033[0m"
+	@echo "$(CGREEN)Update vitess deps ...$(CEND)"
 	govendor fetch -v vitess.io/vitess/...
 
 # Update tidb vendor
 .PHONY: tidb
 tidb:
-	@echo "\033[92mUpdate tidb deps ...\033[0m"
+	@echo "$(CGREEN)Update tidb deps ...$(CEND)"
 	govendor fetch -v github.com/pingcap/tidb/...
 
 # make pingcap parser
 .PHONY: pingcap-parser
 pingcap-parser: tidb
-	@echo "\033[92mUpdate pingcap parser deps ...\033[0m"
+	@echo "$(CGREEN)Update pingcap parser deps ...$(CEND)"
 	govendor fetch -v github.com/pingcap/parser/...
 
 # Update all vendor
 .PHONY: vendor
 vendor: vitess pingcap-parser
 # gometalinter
-# 如果有不想改的lint问题可以使用metalinter.sh加黑名单
-#@bash doc/example/metalinter.sh
 .PHONY: lint
 lint: build
-	@echo "\033[92mRun linter check ...\033[0m"
+	@echo "$(CGREEN)Run linter check ...$(CEND)"
 	CGO_ENABLED=0 retool do gometalinter.v2 -j 1 --config doc/example/metalinter.json ./...
 	retool do revive -formatter friendly --exclude vendor/... -config doc/example/revive.toml ./...
 	retool do golangci-lint --tests=false run
@@ -153,7 +168,7 @@ lint: build
 
 .PHONY: release
 release: build
-	@echo "\033[92mCross platform building for release ...\033[0m"
+	@echo "$(CGREEN)Cross platform building for release ...$(CEND)"
 	@mkdir -p release
 	@for GOOS in darwin linux windows; do \
 		for GOARCH in amd64; do \
@@ -167,66 +182,65 @@ release: build
 
 .PHONY: docker
 docker:
-	@echo "\033[92mBuild mysql test enviorment\033[0m"
+	@echo "$(CGREEN)Build mysql test environment ...$(CEND)"
 	@docker stop soar-mysql 2>/dev/null || true
+	@docker wait soar-mysql 2>/dev/null >/dev/null || true
 	@echo "docker run --name soar-mysql $(MYSQL_RELEASE):$(MYSQL_VERSION)"
 	@docker run --name soar-mysql --rm -d \
 	-e MYSQL_ROOT_PASSWORD=1tIsB1g3rt \
 	-e MYSQL_DATABASE=sakila \
 	-p 3306:3306 \
-	-v `pwd`/doc/example/sakila.sql.gz:/docker-entrypoint-initdb.d/sakila.sql.gz \
+	-v `pwd`/test/sql/init.sql.gz:/docker-entrypoint-initdb.d/init.sql.gz \
 	$(MYSQL_RELEASE):$(MYSQL_VERSION)
 
 	@echo "waiting for sakila database initializing "
-	@while ! mysql -h 127.0.0.1 -u root sakila -p1tIsB1g3rt -NBe "do 1;" 2>/dev/null; do \
-	printf '.' ; \
-	sleep 1 ; \
-	done ; \
-	echo '.'
-	@echo "mysql test enviorment is ready!"
+	@timeout=180; while [ $${timeout} -gt 0 ] ; do \
+		if ! docker exec soar-mysql mysql --user=root --password=1tIsB1g3rt --host "127.0.0.1" --silent -NBe "do 1" >/dev/null 2>&1 ; then \
+			timeout=`expr $$timeout - 1`; \
+			printf '.' ;  sleep 1 ; \
+		else \
+			echo "." ; echo "mysql test environment is ready!" ; break ; \
+		fi ; \
+		if [ $$timeout = 0 ] ; then \
+			echo "." ; echo "$(CRED)docker soar-mysql start timeout(180 s)!$(CEND)" ; exit 1 ; \
+		fi ; \
+	done
 
 .PHONY: docker-connect
 docker-connect:
-	mysql -h 127.0.0.1 -u root -p1tIsB1g3rt -c
+	@docker exec -it soar-mysql mysql --user=root --password=1tIsB1g3rt --host "127.0.0.1" sakila
 
 # attach docker container with bash interactive mode
 .PHONY: docker-it
 docker-it:
 	docker exec -it soar-mysql /bin/bash
 
-.PHONY: main_test
-main_test: install
-	@echo "\033[92mrunning main_test\033[0m"
-	@echo "soar -list-test-sqls | soar"
-	@./doc/example/main_test.sh
-	@echo "main_test Success!"
-
 .PHONY: daily
-daily: | deps fmt vendor docker cover doc lint release install main_test clean logo
-	@echo "\033[92mdaily build finished\033[0m"
+daily: | deps fmt vendor docker cover doc lint release install test-cli clean logo
+	@echo "$(CGREEN)daily build finished ...$(CEND)"
 
 # vendor, docker will cost long time, if all those are ready, daily-quick will much more fast.
 .PHONY: daily-quick
-daily-quick: | deps fmt cover main_test doc lint logo
-	@echo "\033[92mdaily-quick build finished\033[0m"
+daily-quick: | deps fmt cover test-cli doc lint logo
+	@echo "$(CGREEN)daily-quick build finished ...$(CEND)"
 
 .PHONY: logo
 logo:
-	@echo "\033[93m"
+	@echo "$(CYELLOW)"
 	@cat doc/images/logo.ascii
-	@echo "\033[m"
+	@echo "$(CEND)"
 
 # Cleans our projects: deletes binaries
 .PHONY: clean
 clean:
-	@echo "\033[92mCleanup ...\033[0m"
+	@echo "$(CGREEN)Cleanup ...$(CEND)"
 	go clean
 	@for GOOS in darwin linux windows; do \
 	    for GOARCH in 386 amd64; do \
 			rm -f ${BINARY}.$${GOOS}-$${GOARCH} ;\
 		done ;\
 	done
-	rm -f ${BINARY} coverage.*
+	rm -f ${BINARY} coverage.* test/tmp/*
 	find . -name "*.log" -delete
 	git clean -fi
 	docker stop soar-mysql 2>/dev/null || true

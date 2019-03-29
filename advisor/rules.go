@@ -58,7 +58,7 @@ func NewQuery4Audit(sql string, options ...string) (*Query4Audit, error) {
 	// vitess 语法解析不上报，以 tidb parser 为主
 	q.Stmt, vErr = sqlparser.Parse(sql)
 	if vErr != nil {
-		common.Log.Warn("NewQuery4Audit vitess parse Error: %s", vErr.Error())
+		common.Log.Warn("NewQuery4Audit vitess parse Error: %s, Query: %s", vErr.Error(), sql)
 	}
 
 	// TODO: charset, collation
@@ -102,7 +102,7 @@ type Rule struct {
 * SEC   Security
 * STA   Standard
 * SUB   Subquery
-* TBL   Table
+* TBL   TableName
 * TRA   Trace, 由trace模块给
 
 */
@@ -1405,7 +1405,7 @@ func FormatSuggest(sql string, format string, suggests ...map[string]Rule) (map[
 		}
 		sort.Strings(sortedHeuristicSuggest)
 		for _, item := range sortedHeuristicSuggest {
-			buf = append(buf, fmt.Sprintln("## ", suggest[item].Summary))
+			buf = append(buf, fmt.Sprintln("##", suggest[item].Summary))
 			if item == "OK" {
 				continue
 			}

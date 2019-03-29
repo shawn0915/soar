@@ -19,7 +19,6 @@ package advisor
 import (
 	"errors"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/XiaoMi/soar/common"
@@ -38,7 +37,7 @@ func TestRuleImplicitAlias(t *testing.T) {
 			"select col from tbl tb where id < 1000",
 		},
 		{
-			"do 1",
+			"select 1",
 		},
 	}
 	for _, sql := range sqls[0] {
@@ -947,6 +946,9 @@ func TestRuleMultiCompare(t *testing.T) {
 	sqls := [][]string{
 		{
 			"SELECT * FROM tbl WHERE col = col = 'abc'",
+			"SELECT * FROM tbl WHERE col = 'def' and col = col = 'abc'",
+			"SELECT * FROM tbl WHERE col = 'def' or col = col = 'abc'",
+			"SELECT * FROM tbl WHERE col = col = 'abc' and col = 'def'",
 			"UPDATE tbl set col = 1 WHERE col = col = 'abc'",
 			"DELETE FROM tbl WHERE col = col = 'abc'",
 		},
@@ -3204,31 +3206,38 @@ func TestRuleMaxTextColsCount(t *testing.T) {
 // COL.007
 func TestRuleMaxTextColsCountWithEnv(t *testing.T) {
 	common.Log.Debug("Entering function: %s", common.GetFunctionName())
-	dsn := common.Config.OnlineDSN
-	common.Config.OnlineDSN = common.Config.TestDSN
+	orgMaxTextColsCount := common.Config.MaxTextColsCount
+	common.Config.MaxTextColsCount = 1
+
 	vEnv, rEnv := env.BuildEnv()
 	defer vEnv.CleanUp()
 	initSQLs := []string{
-		`CREATE TABLE t1 (id int, title text, content blob);`,
-		"alter table t1 add column other text;",
+		`CREATE TABLE t1 (id int, title text);`,
+		`CREATE TABLE t2 (id int, title text);`,
 	}
 
 	for _, sql := range initSQLs {
 		vEnv.BuildVirtualEnv(rEnv, sql)
+	}
 
-		if !strings.HasPrefix(strings.ToLower(sql), "alter") {
-			continue
-		}
+	sqls := [][]string{
+		{
+			"alter table t1 add column other text;",
+		},
+		{
+			"alter table t2 add column col varchar(10);",
+		},
+	}
 
+	for _, sql := range sqls[0] {
+		vEnv.BuildVirtualEnv(rEnv, sql)
 		stmt, syntaxErr := sqlparser.Parse(sql)
 		if syntaxErr != nil {
-			common.Log.Critical("Syntax Error: %v, SQL: %s", syntaxErr, sql)
+			t.Error(syntaxErr)
 		}
 
 		q := &Query4Audit{Query: sql, Stmt: stmt}
-
 		idxAdvisor, err := NewAdvisor(vEnv, *rEnv, *q)
-
 		if err != nil {
 			t.Error("NewAdvisor Error: ", err, "SQL: ", sql)
 		}
@@ -3240,8 +3249,30 @@ func TestRuleMaxTextColsCountWithEnv(t *testing.T) {
 			}
 		}
 	}
+
+	for _, sql := range sqls[1] {
+		vEnv.BuildVirtualEnv(rEnv, sql)
+		stmt, syntaxErr := sqlparser.Parse(sql)
+		if syntaxErr != nil {
+			t.Error(syntaxErr)
+		}
+
+		q := &Query4Audit{Query: sql, Stmt: stmt}
+		idxAdvisor, err := NewAdvisor(vEnv, *rEnv, *q)
+		if err != nil {
+			t.Error("NewAdvisor Error: ", err, "SQL: ", sql)
+		}
+
+		if idxAdvisor != nil {
+			rule := idxAdvisor.RuleMaxTextColsCount()
+			if rule.Item != "OK" {
+				t.Error("Rule not match:", rule, "Expect : OK, SQL:", sql)
+			}
+		}
+	}
+
+	common.Config.MaxTextColsCount = orgMaxTextColsCount
 	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
-	common.Config.OnlineDSN = dsn
 }
 
 // TBL.002
@@ -3453,7 +3484,7 @@ func TestRuleSpaceAfterDot(t *testing.T) {
 
 func TestRuleMySQLError(t *testing.T) {
 	common.Log.Debug("Entering function: %s", common.GetFunctionName())
-	err := errors.New(`Received #1146 error from MySQL server: "can't xxxx"`)
+	err := errors.New(`received #1146 error from MySQL server: "can't xxxx"`)
 	if RuleMySQLError("ERR.002", err).Content != "" {
 		t.Error("Want: '', Bug get: ", err)
 	}

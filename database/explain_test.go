@@ -18,7 +18,6 @@ package database
 
 import (
 	"fmt"
-	"os"
 	"testing"
 
 	"github.com/XiaoMi/soar/common"
@@ -26,24 +25,8 @@ import (
 	"github.com/kr/pretty"
 )
 
-var connTest *Connector
-
-func init() {
-	common.BaseDir = common.DevPath
-	common.ParseConfig("")
-	connTest = &Connector{
-		Addr:     common.Config.OnlineDSN.Addr,
-		User:     common.Config.OnlineDSN.User,
-		Pass:     common.Config.OnlineDSN.Password,
-		Database: common.Config.OnlineDSN.Schema,
-	}
-	if _, err := connTest.Version(); err != nil {
-		fmt.Printf("Test env Error: %v", err)
-		os.Exit(0)
-	}
-}
-
 var sqls = []string{
+	`use sakila`, // not explain able sql, will convert to empty!
 	`select * from city where country_id = 44;`,
 	`select * from address where address2 is not null;`,
 	`select * from address where address2 is null;`,
@@ -54,10 +37,10 @@ var sqls = []string{
 	`select * from city where country_id > 31 and city = 'Aden';`,
 	`select * from address where address_id > 8 and city_id < 400 and district = 'Nantou';`,
 	`select * from address where address_id > 8 and city_id < 400;`,
-	`select * from actor where last_update='2006-02-15 04:34:33' and last_name='CHASE' group by first_name;`,
-	`select * from address where last_update >='2014-09-25 22:33:47' group by district;`,
-	`select * from address group by address,district;`,
-	`select * from address where last_update='2014-09-25 22:30:27' group by district,(address_id+city_id);`,
+	`select first_name from actor where last_update='2006-02-15 04:34:33' and last_name='CHASE' group by first_name;`,
+	`select district from address where last_update >='2014-09-25 22:33:47' group by district;`,
+	`select address from address group by address,district;`,
+	`select district from address where last_update='2014-09-25 22:30:27' group by district,(address_id+city_id);`,
 	`select * from customer where active=1 order by last_name limit 10;`,
 	`select * from customer order by last_name limit 10;`,
 	`select * from customer where address_id > 224 order by address_id limit 10;`,
@@ -2351,20 +2334,30 @@ possible_keys: idx_fk_country_id,idx_country_id_city,idx_all,idx_other
 }
 
 func TestExplain(t *testing.T) {
-	for _, sql := range sqls {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
+	// TraditionalFormatExplain
+	for idx, sql := range sqls {
 		exp, err := connTest.Explain(sql, TraditionalExplainType, TraditionalFormatExplain)
-		//exp, err := conn.Explain(sql, TraditionalExplainType, JSONFormatExplain)
-		fmt.Println("Old: ", sql)
-		fmt.Println("New: ", exp.SQL)
 		if err != nil {
-			fmt.Println(err)
+			t.Error(err)
 		}
+		pretty.Println("No.:", idx, "\nOld: ", sql, "\nNew: ", exp.SQL)
 		pretty.Println(exp)
-		fmt.Println()
 	}
+	// JSONFormatExplain
+	for idx, sql := range sqls {
+		exp, err := connTest.Explain(sql, TraditionalExplainType, JSONFormatExplain)
+		if err != nil {
+			t.Error(err)
+		}
+		pretty.Println("No.:", idx, "\nOld: ", sql, "\nNew: ", exp.SQL)
+		pretty.Println(exp)
+	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestParseExplainText(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	for _, content := range exp {
 		pretty.Println(RemoveSQLComments(content))
 		pretty.Println(ParseExplainText(content))
@@ -2376,39 +2369,48 @@ func TestParseExplainText(t *testing.T) {
 		pretty.Println(explainInfo)
 		fmt.Println(err)
 	*/
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFindTablesInJson(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	idx := 9
 	for _, j := range exp[idx : idx+1] {
 		pretty.Println(j)
 		findTablesInJSON(j, 0)
 	}
 	pretty.Println(len(explainJSONTables), explainJSONTables)
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFormatJsonIntoTraditional(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	idx := 11
 	for _, j := range exp[idx : idx+1] {
 		pretty.Println(j)
 		pretty.Println(FormatJSONIntoTraditional(j))
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestPrintMarkdownExplainTable(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	expInfo, err := connTest.Explain("select 1", TraditionalExplainType, TraditionalFormatExplain)
 	if err != nil {
 		t.Error(err)
 	}
+
 	err = common.GoldenDiff(func() {
 		PrintMarkdownExplainTable(expInfo)
 	}, t.Name(), update)
 	if err != nil {
 		t.Error(err)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestExplainInfoTranslator(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	expInfo, err := connTest.Explain("select 1", TraditionalExplainType, TraditionalFormatExplain)
 	if err != nil {
 		t.Error(err)
@@ -2419,9 +2421,11 @@ func TestExplainInfoTranslator(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestMySQLExplainWarnings(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	expInfo, err := connTest.Explain("select 1", TraditionalExplainType, TraditionalFormatExplain)
 	if err != nil {
 		t.Error(err)
@@ -2432,32 +2436,40 @@ func TestMySQLExplainWarnings(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestMySQLExplainQueryCost(t *testing.T) {
-	expInfo, err := connTest.Explain("select 1", TraditionalExplainType, TraditionalFormatExplain)
-	if err != nil {
-		t.Error(err)
-	}
-	err = common.GoldenDiff(func() {
-		MySQLExplainQueryCost(expInfo)
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
+	err := common.GoldenDiff(func() {
+		expInfo, err := connTest.Explain("select 1", TraditionalExplainType, TraditionalFormatExplain)
+		fmt.Println(err, MySQLExplainQueryCost(expInfo))
+		expInfo, err = connTest.Explain("select 1", ExtendedExplainType, TraditionalFormatExplain)
+		fmt.Println(err, MySQLExplainQueryCost(expInfo))
+		expInfo, err = connTest.Explain("select 1", TraditionalExplainType, JSONFormatExplain)
+		fmt.Println(err, MySQLExplainQueryCost(expInfo))
 	}, t.Name(), update)
 	if err != nil {
 		t.Error(err)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestSupportExplainWrite(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	_, err := connTest.supportExplainWrite()
 	if err != nil {
 		t.Error(err)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestExplainAbleSQL(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	for _, sql := range sqls {
 		if _, err := connTest.explainAbleSQL(sql); err != nil {
 			t.Errorf("SQL: %s, not explain able", sql)
 		}
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }

@@ -17,10 +17,12 @@
 package common
 
 import (
+	"fmt"
 	"testing"
 )
 
 func TestGetDataTypeLength(t *testing.T) {
+	Log.Debug("Entering function: %s", GetFunctionName())
 	typeList := map[string][]int{
 		"varchar(20)":  {20},
 		"int(2)":       {2},
@@ -37,10 +39,11 @@ func TestGetDataTypeLength(t *testing.T) {
 			}
 		}
 	}
-
+	Log.Debug("Exiting function: %s", GetFunctionName())
 }
 
 func TestGetDataTypeBase(t *testing.T) {
+	Log.Debug("Entering function: %s", GetFunctionName())
 	typeList := map[string]string{
 		"varchar(20)":  "varchar",
 		"int(2)":       "int",
@@ -52,10 +55,11 @@ func TestGetDataTypeBase(t *testing.T) {
 			t.Errorf("Not match, want %s, got %s", typeList[typ], got)
 		}
 	}
-
+	Log.Debug("Exiting function: %s", GetFunctionName())
 }
 
 func TestGetDataBytes(t *testing.T) {
+	Log.Debug("Entering function: %s", GetFunctionName())
 	cols50604 := map[*Column]int{
 		// numeric type
 		{Name: "col000", DataType: "tinyint", Character: "utf8"}:        1,
@@ -137,4 +141,33 @@ func TestGetDataBytes(t *testing.T) {
 			t.Errorf("Version: 5.5.0, %s Not match, want %d, got %d", col.Name, bytes, got)
 		}
 	}
+	Log.Debug("Exiting function: %s", GetFunctionName())
+}
+
+func TestStringStorageReq(t *testing.T) {
+	Log.Debug("Entering function: %s", GetFunctionName())
+	dataTypes := []string{
+		"char(10)",
+		"char(256)",
+		"binary(10)",
+		"binary(256)",
+		"varchar(10)",
+		"varbinary(10)",
+		"enum('G','PG','PG-13','R','NC-17')",
+		"set('one', 'two')",
+		// wrong case
+		"not_exist",
+		"char(-1)",
+	}
+	err := GoldenDiff(func() {
+		for name := range CharSets {
+			for _, tp := range dataTypes {
+				fmt.Println(tp, name, StringStorageReq(tp, name))
+			}
+		}
+	}, t.Name(), update)
+	if err != nil {
+		t.Error(err)
+	}
+	Log.Debug("Exiting function: %s", GetFunctionName())
 }

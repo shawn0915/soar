@@ -17,16 +17,14 @@
 package advisor
 
 import (
-	"flag"
 	"strings"
 	"testing"
 
 	"github.com/XiaoMi/soar/common"
 )
 
-var update = flag.Bool("update", false, "update .golden files")
-
 func TestListTestSQLs(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	for _, sql := range common.TestSQLs {
 		if !strings.HasSuffix(sql, ";") {
 			t.Errorf("%s should end with ';'", sql)
@@ -36,25 +34,38 @@ func TestListTestSQLs(t *testing.T) {
 	if nil != err {
 		t.Fatal(err)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestListHeuristicRules(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	err := common.GoldenDiff(func() { ListHeuristicRules(HeuristicRules) }, t.Name(), update)
 	if nil != err {
 		t.Fatal(err)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestInBlackList(t *testing.T) {
-	common.BlackList = []string{"select"}
-	if !InBlackList("select 1") {
-		t.Error("should be true")
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
+	sqls := []string{
+		"select",
+		"select 1",
 	}
+	common.BlackList = []string{"select"}
+	for _, sql := range sqls {
+		if !InBlackList(sql) {
+			t.Error("should be true")
+		}
+	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestIsIgnoreRule(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	common.Config.IgnoreRules = []string{"test"}
 	if !IsIgnoreRule("test") {
 		t.Error("should be true")
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }

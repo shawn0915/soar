@@ -27,7 +27,7 @@ type Meta map[string]*DB
 // DB 数据库相关的结构体
 type DB struct {
 	Name  string
-	Table map[string]*Table // ['table_name']*Table
+	Table map[string]*Table // ['table_name']*TableName
 }
 
 // NewDB 用于初始化*DB
@@ -45,7 +45,7 @@ type Table struct {
 	Column       map[string]*Column
 }
 
-// NewTable 初始化*Table
+// NewTable 初始化*TableName
 func NewTable(tb string) *Table {
 	return &Table{
 		TableName:    tb,
@@ -217,13 +217,20 @@ func GetDataTypeLength(dataType string) []int {
 		dataLength := dataType[si+1:]
 		if ei := strings.Index(dataLength, ")"); ei > 0 {
 			dataLength = dataLength[:ei]
-			for _, l := range strings.Split(dataLength, ",") {
-				v, err := strconv.Atoi(l)
-				if err != nil {
-					Log.Debug("GetDataTypeLength() Error: %v", err)
-					return []int{-1}
+			if strings.HasPrefix(dataType, "enum") ||
+				strings.HasPrefix(dataType, "set") {
+				// set('one', 'two'), enum('G','PG','PG-13','R','NC-17')
+				length = []int{len(strings.Split(dataLength, ","))}
+			} else {
+				// char(10), varchar(10)
+				for _, l := range strings.Split(dataLength, ",") {
+					v, err := strconv.Atoi(l)
+					if err != nil {
+						Log.Debug("GetDataTypeLength() Error: %v", err)
+						return []int{-1}
+					}
+					length = append(length, v)
 				}
-				length = append(length, v)
 			}
 		}
 	}
@@ -482,13 +489,12 @@ func StringStorageReq(dataType string, charset string) int {
 			return typeLength[0]*bysPerChar + 1
 		}
 		return typeLength[0]*bysPerChar + 2
-
 	case "enum":
 		// 1 or 2 bytes, depending on the number of enumeration values (65,535 values maximum)
-		return 2
+		return typeLength[0]/(2^15) + 1
 	case "set":
 		// 1, 2, 3, 4, or 8 bytes, depending on the number of set members (64 members maximum)
-		return 8
+		return typeLength[0]/8 + 1
 	default:
 		return 0
 	}

@@ -18,32 +18,51 @@ package env
 
 import (
 	"flag"
+	"fmt"
+	"os"
 	"testing"
 
 	"github.com/XiaoMi/soar/common"
 	"github.com/XiaoMi/soar/database"
+
+	"github.com/go-sql-driver/mysql"
 	"github.com/kr/pretty"
-	"github.com/ziutek/mymysql/mysql"
 )
 
-var connTest *database.Connector
 var update = flag.Bool("update", false, "update .golden files")
+var vEnv *VirtualEnv
+var rEnv *database.Connector
 
-func init() {
+func TestMain(m *testing.M) {
+	// 初始化 init
 	common.BaseDir = common.DevPath
 	err := common.ParseConfig("")
 	common.LogIfError(err, "init ParseConfig")
-	connTest = &database.Connector{
-		Addr:     common.Config.TestDSN.Addr,
-		User:     common.Config.TestDSN.User,
-		Pass:     common.Config.TestDSN.Password,
-		Database: common.Config.TestDSN.Schema,
-		Charset:  common.Config.TestDSN.Charset,
+	common.Log.Debug("env_test init")
+	vEnv, rEnv = BuildEnv()
+	if _, err = vEnv.Version(); err != nil {
+		fmt.Println(err.Error(), ", By pass all advisor test cases")
+		os.Exit(0)
 	}
+
+	if _, err := rEnv.Version(); err != nil {
+		fmt.Println(err.Error(), ", By pass all advisor test cases")
+		os.Exit(0)
+	}
+
+	// 分割线
+	flag.Parse()
+	m.Run()
+
+	// 环境清理
+	vEnv.CleanUp()
 }
 
 func TestNewVirtualEnv(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	testSQL := []string{
+		"use sakila",
+		"select frm syntaxError",
 		"create table t(id int,c1 varchar(20),PRIMARY KEY (id));",
 		"alter table t add index `idx_c1`(c1);",
 		"select * from city where country_id = 44;",
@@ -87,22 +106,18 @@ func TestNewVirtualEnv(t *testing.T) {
 		"select ID,name from (select address from customer_list where SID=1 order by phone limit 50,10) a join customer_list l on (a.address=l.address) join city c on (c.city=l.city) order by phone desc;",
 	}
 
-	rEnv := connTest
-
-	env := NewVirtualEnv(connTest)
-	defer env.CleanUp()
 	err := common.GoldenDiff(func() {
 		for _, sql := range testSQL {
-			env.BuildVirtualEnv(rEnv, sql)
-			switch err := env.Error.(type) {
+			vEnv.BuildVirtualEnv(rEnv, sql)
+			switch err := vEnv.Error.(type) {
 			case nil:
 				pretty.Println(sql, "OK")
 			case error:
 				// unexpected EOF
 				// 测试环境无法访问，或者被Disable的时候会进入这个分支
 				pretty.Println(sql, err)
-			case *mysql.Error:
-				if err.Code != 1061 {
+			case *mysql.MySQLError:
+				if err.Number != 1061 {
 					t.Error(err)
 				}
 			default:
@@ -113,10 +128,11 @@ func TestNewVirtualEnv(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestCleanupTestDatabase(t *testing.T) {
-	vEnv, _ := BuildEnv()
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	if common.Config.TestDSN.Disable {
 		common.Log.Warn("common.Config.TestDSN.Disable=true, by pass TestCleanupTestDatabase")
 		return
@@ -142,11 +158,11 @@ func TestCleanupTestDatabase(t *testing.T) {
 	if err != nil {
 		t.Error("optimizer_060102150405 not exist, should not be dropped")
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestGenTableColumns(t *testing.T) {
-	vEnv, rEnv := BuildEnv()
-	defer vEnv.CleanUp()
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 
 	pretty.Println(common.Config.TestDSN.Disable)
 	if common.Config.TestDSN.Disable {
@@ -210,4 +226,68 @@ func TestGenTableColumns(t *testing.T) {
 			}
 		}
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
+}
+
+func TestCreateTable(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
+	orgSamplingCondition := common.Config.SamplingCondition
+	common.Config.SamplingCondition = "LIMIT 1"
+
+	orgREnvDatabase := rEnv.Database
+	rEnv.Database = "sakila"
+	// TODO: support VIEW,
+	tables := []string{
+		"actor",
+		// "actor_info", // VIEW
+		"address",
+		"category",
+		"city",
+		"country",
+		"customer",
+		"customer_list",
+		"film",
+		"film_actor",
+		"film_category",
+		"film_list",
+		"film_text",
+		"inventory",
+		"language",
+		"nicer_but_slower_film_list",
+		"payment",
+		"rental",
+		// "sales_by_film_category", // VIEW
+		// "sales_by_store", // VIEW
+		"staff",
+		"staff_list",
+		"store",
+	}
+	for _, table := range tables {
+		err := vEnv.createTable(rEnv, table)
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	common.Config.SamplingCondition = orgSamplingCondition
+	rEnv.Database = orgREnvDatabase
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
+}
+
+func TestCreateDatabase(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
+	orgREnvDatabase := rEnv.Database
+	rEnv.Database = "sakila"
+	err := vEnv.createDatabase(rEnv)
+	if err != nil {
+		t.Error(err)
+	}
+	if vEnv.DBHash("sakila") == "sakila" {
+		t.Errorf("database: sakila rehashed failed!")
+	}
+
+	if vEnv.DBHash("not_exist_db") != "not_exist_db" {
+		t.Errorf("database: not_exist_db rehashed!")
+	}
+	rEnv.Database = orgREnvDatabase
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }

@@ -22,14 +22,22 @@ import (
 	"github.com/kr/pretty"
 	"github.com/pingcap/parser"
 	"github.com/pingcap/parser/ast"
-	// for pincap parser
+
+	json "github.com/CorgiMan/json2"
+
+	// for pingcap parser
 	_ "github.com/pingcap/tidb/types/parser_driver"
 )
 
 // TiParse TiDB 语法解析
 func TiParse(sql, charset, collation string) ([]ast.StmtNode, error) {
 	p := parser.New()
-	return p.Parse(sql, charset, collation)
+	stmt, warn, err := p.Parse(sql, charset, collation)
+	// TODO: bypass warning info
+	for _, w := range warn {
+		common.Log.Warn(w.Error())
+	}
+	return stmt, err
 }
 
 // PrintPrettyStmtNode 打印TiParse语法树
@@ -43,20 +51,19 @@ func PrintPrettyStmtNode(sql, charset, collation string) {
 	}
 }
 
-// TiVisitor TODO:
-type TiVisitor struct {
-	EnterFunc func(node ast.Node) bool
-	LeaveFunc func(node ast.Node) bool
-}
-
-// Enter TODO:
-func (visitor *TiVisitor) Enter(n ast.Node) (node ast.Node, skip bool) {
-	skip = visitor.EnterFunc(n)
-	return
-}
-
-// Leave TODO:
-func (visitor *TiVisitor) Leave(n ast.Node) (node ast.Node, ok bool) {
-	ok = visitor.LeaveFunc(n)
-	return
+// StmtNode2JSON TiParse AST tree into json format
+func StmtNode2JSON(sql, charset, collation string) string {
+	var str string
+	tree, err := TiParse(sql, charset, collation)
+	if err != nil {
+		common.Log.Warning(err.Error())
+	} else {
+		b, err := json.MarshalIndent(tree, "", "  ")
+		if err != nil {
+			common.Log.Error(err.Error())
+		} else {
+			str = string(b)
+		}
+	}
+	return str
 }

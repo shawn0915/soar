@@ -17,21 +17,20 @@
 package database
 
 import (
+	"bytes"
+	"database/sql"
 	"errors"
 	"fmt"
-	"io/ioutil"
-	"os"
+	"io"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/XiaoMi/soar/ast"
 	"github.com/XiaoMi/soar/common"
 
-	"github.com/ziutek/mymysql/mysql"
-	// mymysql driver
-	_ "github.com/ziutek/mymysql/native"
+	// for database/sql
+	_ "github.com/go-sql-driver/mysql"
 	"vitess.io/vitess/go/vt/sqlparser"
 )
 
@@ -42,81 +41,86 @@ type Connector struct {
 	Pass     string
 	Database string
 	Charset  string
+	Conn     *sql.DB
 }
 
 // QueryResult 数据库查询返回值
 type QueryResult struct {
-	Rows      []mysql.Row
-	Result    mysql.Result
+	Rows      *sql.Rows
 	Error     error
-	Warning   []mysql.Row
+	Warning   *sql.Rows
 	QueryCost float64
 }
 
-// NewConnection 创建新连接
-func (db *Connector) NewConnection() mysql.Conn {
-	return mysql.New("tcp", "", db.Addr, db.User, db.Pass, db.Database)
+// NewConnector 创建新连接
+func NewConnector(dsn *common.Dsn) (*Connector, error) {
+	conn, err := sql.Open("mysql", common.FormatDSN(dsn))
+	if err != nil {
+		return nil, err
+	}
+	connector := &Connector{
+		Addr:     dsn.Addr,
+		User:     dsn.User,
+		Pass:     dsn.Password,
+		Database: dsn.Schema,
+		Charset:  dsn.Charset,
+		Conn:     conn,
+	}
+	return connector, err
 }
 
 // Query 执行SQL
-func (db *Connector) Query(sql string, params ...interface{}) (*QueryResult, error) {
+func (db *Connector) Query(sql string, params ...interface{}) (QueryResult, error) {
+	var res QueryResult
+	var err error
 	// 测试环境如果检查是关闭的，则SQL不会被执行
 	if common.Config.TestDSN.Disable {
-		return nil, errors.New("Dsn Disable")
+		return res, errors.New("dsn is disable")
 	}
-
 	// 数据库安全性检查：如果 Connector 的 IP 端口与 TEST 环境不一致，则启用SQL白名单
 	// 不在白名单中的SQL不允许执行
 	// 执行环境与test环境不相同
 	if db.Addr != common.Config.TestDSN.Addr && db.dangerousQuery(sql) {
-		return nil, fmt.Errorf("query execution deny: execute SQL with DSN(%s/%s) '%s'",
+		return res, fmt.Errorf("query execution deny: execute SQL with DSN(%s/%s) '%s'",
 			db.Addr, db.Database, fmt.Sprintf(sql, params...))
 	}
 
+	if db.Database == "" {
+		db.Database = "information_schema"
+	}
+
 	common.Log.Debug("Execute SQL with DSN(%s/%s) : %s", db.Addr, db.Database, fmt.Sprintf(sql, params...))
-	conn := db.NewConnection()
-
-	// 设置SQL连接超时时间
-	conn.SetTimeout(time.Duration(common.Config.ConnTimeOut) * time.Second)
-	defer conn.Close()
-	err := conn.Connect()
+	_, err = db.Conn.Exec("USE " + db.Database)
 	if err != nil {
-		return nil, err
+		common.Log.Error(err.Error())
+		return res, err
+	}
+	res.Rows, res.Error = db.Conn.Query(sql, params...)
+
+	if common.Config.ShowWarnings {
+		res.Warning, err = db.Conn.Query("SHOW WARNINGS")
+		common.LogIfError(err, "")
 	}
 
-	// 添加SQL执行超时限制
-	ch := make(chan QueryResult, 1)
-	go func() {
-		res := QueryResult{}
-		res.Rows, res.Result, res.Error = conn.Query(sql, params...)
-
-		if common.Config.ShowWarnings {
-			warning, _, err := conn.Query("SHOW WARNINGS")
-			if err == nil {
-				res.Warning = warning
+	// SHOW WARNINGS 并不会影响 last_query_cost
+	if common.Config.ShowLastQueryCost {
+		cost, err := db.Conn.Query("SHOW SESSION STATUS LIKE 'last_query_cost'")
+		if err == nil {
+			var varName string
+			if cost.Next() {
+				err = cost.Scan(&varName, &res.QueryCost)
+				common.LogIfError(err, "")
+			}
+			if err := cost.Close(); err != nil {
+				common.Log.Error(err.Error())
 			}
 		}
-
-		// SHOW WARNINGS 并不会影响 last_query_cost
-		if common.Config.ShowLastQueryCost {
-			cost, _, err := conn.Query("SHOW SESSION STATUS LIKE 'last_query_cost'")
-			if err == nil {
-				if len(cost) > 0 {
-					res.QueryCost = cost[0].Float(1)
-				}
-			}
-		}
-
-		ch <- res
-	}()
-
-	select {
-	case res := <-ch:
-		return &res, res.Error
-	case <-time.After(time.Duration(common.Config.QueryTimeOut) * time.Second):
-		return nil, errors.New("query execution timeout")
 	}
 
+	if res.Error != nil && err == nil {
+		err = res.Error
+	}
+	return res, err
 }
 
 // Version 获取MySQL数据库版本
@@ -131,8 +135,16 @@ func (db *Connector) Version() (int, error) {
 
 	// MariaDB https://mariadb.com/kb/en/library/comment-syntax/
 	// MySQL https://dev.mysql.com/doc/refman/8.0/en/comments.html
-	versionStr := strings.Split(res.Rows[0].Str(0), "-")[0]
-	versionSeg := strings.Split(versionStr, ".")
+	var versionStr string
+	var versionSeg []string
+	if res.Rows.Next() {
+		err = res.Rows.Scan(&versionStr)
+	}
+	if err := res.Rows.Close(); err != nil {
+		common.Log.Error(err.Error())
+	}
+	versionStr = strings.Split(versionStr, "-")[0]
+	versionSeg = strings.Split(versionStr, ".")
 	if len(versionSeg) == 3 {
 		versionStr = fmt.Sprintf("%s%02s%02s", versionSeg[0], versionSeg[1], versionSeg[2])
 		version, err = strconv.Atoi(versionStr)
@@ -140,61 +152,23 @@ func (db *Connector) Version() (int, error) {
 	return version, err
 }
 
-// Source execute sql from file
-func (db *Connector) Source(file string) ([]*QueryResult, error) {
-	var sqlCounter int // SQL 计数器
-	var result []*QueryResult
-
-	fd, err := os.Open(file)
-	defer func() {
-		err = fd.Close()
-		if err != nil {
-			common.Log.Error("(db *Connector) Source(%s) fd.Close failed: %s", file, err.Error())
-		}
-	}()
-	if err != nil {
-		common.Log.Warning("(db *Connector) Source(%s) os.Open failed: %s", file, err.Error())
-		return nil, err
-	}
-	data, err := ioutil.ReadAll(fd)
-	if err != nil {
-		common.Log.Critical("ioutil.ReadAll Error: %s", err.Error())
-		return nil, err
-	}
-
-	sql := strings.TrimSpace(string(data))
-	buf := strings.TrimSpace(sql)
-	for ; ; sqlCounter++ {
-		if buf == "" {
-			break
-		}
-
-		// 查询请求切分
-		_, sql, bufBytes := ast.SplitStatement([]byte(buf), []byte(common.Config.Delimiter))
-		buf = string(bufBytes)
-		sql = strings.TrimSpace(sql)
-		common.Log.Debug("Source Query SQL: %s", sql)
-
-		res, e := db.Query(sql)
-		if e != nil {
-			common.Log.Error("(db *Connector) Source Filename: %s, SQLCounter.: %d", file, sqlCounter)
-			return result, e
-		}
-		result = append(result, res)
-	}
-	return result, nil
-}
-
 // SingleIntValue 获取某个int型变量的值
 func (db *Connector) SingleIntValue(option string) (int, error) {
 	// 从数据库中获取信息
-	res, err := db.Query("select @@%s", option)
+	res, err := db.Query("select @@" + option)
 	if err != nil {
 		common.Log.Warn("(db *Connector) SingleIntValue() Error: %v", err)
 		return -1, err
 	}
 
-	return res.Rows[0].Int(0), err
+	var intVal int
+	if res.Rows.Next() {
+		err = res.Rows.Scan(&intVal)
+	}
+	if err := res.Rows.Close(); err != nil {
+		common.Log.Error(err.Error())
+	}
+	return intVal, err
 }
 
 // ColumnCardinality 粒度计算
@@ -202,6 +176,7 @@ func (db *Connector) ColumnCardinality(tb, col string) float64 {
 	// 获取该表上的已有的索引
 
 	// show table status 获取总行数（近似）
+	common.Log.Debug("ColumnCardinality, ShowTableStatus check `%s` status Rows", tb)
 	tbStatus, err := db.ShowTableStatus(tb)
 	if err != nil {
 		common.Log.Warn("(db *Connector) ColumnCardinality() ShowTableStatus Error: %v", err)
@@ -228,20 +203,37 @@ func (db *Connector) ColumnCardinality(tb, col string) float64 {
 	}
 
 	// 计算该列散粒度
-	res, err := db.Query("select count(distinct `%s`) from `%s`.`%s`", col, db.Database, tb)
+	db.Conn.Stats()
+	res, err := db.Query(fmt.Sprintf("select count(distinct `%s`) from `%s`.`%s`",
+		Escape(col, false),
+		Escape(db.Database, false),
+		Escape(tb, false)))
 	if err != nil {
 		common.Log.Warn("(db *Connector) ColumnCardinality() Query Error: %v", err)
 		return 0
 	}
 
-	colNum := res.Rows[0].Float(0)
+	var colNum float64
+	if res.Rows.Next() {
+		err = res.Rows.Scan(&colNum)
+		if err != nil {
+			common.Log.Warn("(db *Connector) ColumnCardinality() Query Error: %v", err)
+			return 0
+		}
+	}
+	res.Rows.Close()
 
+	// 当table status元数据不准确时 rowTotal 可能远小于count(*)，导致散粒度大于1
+	if colNum > float64(rowTotal) {
+		return 1
+	}
 	// 散粒度区间：[0,1]
 	return colNum / float64(rowTotal)
 }
 
 // IsView 判断表是否是视图
 func (db *Connector) IsView(tbName string) bool {
+	common.Log.Debug("IsView, ShowTableStatus check if `%s` is view", tbName)
 	tbStatus, err := db.ShowTableStatus(tbName)
 	if err != nil {
 		common.Log.Error("(db *Connector) IsView Error: %v:", err)
@@ -249,13 +241,12 @@ func (db *Connector) IsView(tbName string) bool {
 	}
 
 	if len(tbStatus.Rows) > 0 {
-		if tbStatus.Rows[0].Comment == "VIEW" {
+		if string(tbStatus.Rows[0].Comment) == "VIEW" {
 			return true
 		}
 	}
 
 	return false
-
 }
 
 // RemoveSQLComments 去除SQL中的注释
@@ -281,17 +272,18 @@ func (db *Connector) dangerousQuery(query string) bool {
 		return true
 	}
 
-	for _, sql := range queries {
+	for _, query := range queries {
 		dangerous := true
 		whiteList := []string{
 			"select",
 			"show",
 			"explain",
 			"describe",
+			"desc",
 		}
 
 		for _, prefix := range whiteList {
-			if strings.HasPrefix(sql, prefix) {
+			if strings.HasPrefix(query, prefix) {
 				dangerous = false
 				break
 			}
@@ -303,4 +295,102 @@ func (db *Connector) dangerousQuery(query string) bool {
 	}
 
 	return false
+}
+
+// TimeFormat standard MySQL datetime format
+const TimeFormat = "2006-01-02 15:04:05.000000000"
+
+// TimeString returns t as string in MySQL format Converts time.Time zero to MySQL zero.
+func TimeString(t time.Time) string {
+	if t.IsZero() {
+		return "0000-00-00 00:00:00"
+	}
+	if t.Nanosecond() == 0 {
+		return t.Format(TimeFormat[:19])
+	}
+	return t.Format(TimeFormat)
+}
+
+// NullString null able string
+func NullString(buf []byte) string {
+	if buf == nil {
+		return "NULL"
+	}
+	return string(buf)
+}
+
+// quoteEscape sql_mode=no_backslash_escapes
+func quoteEscape(source string) string {
+	var buf bytes.Buffer
+	last := 0
+	for ii, bb := range source {
+		if bb == '\'' {
+			_, err := io.WriteString(&buf, source[last:ii])
+			common.LogIfWarn(err, "")
+			_, err = io.WriteString(&buf, `''`)
+			common.LogIfWarn(err, "")
+			last = ii + 1
+		}
+	}
+	_, err := io.WriteString(&buf, source[last:])
+	common.LogIfWarn(err, "")
+	return buf.String()
+}
+
+// stringEscape mysql_escape_string
+// https://github.com/liule/golang_escape
+func stringEscape(source string) string {
+	var j int
+	if source == "" {
+		return source
+	}
+	tempStr := source[:]
+	desc := make([]byte, len(tempStr)*2)
+	for i, b := range tempStr {
+		flag := false
+		var escape byte
+		switch b {
+		case '\000':
+			flag = true
+			escape = '\000'
+		case '\r':
+			flag = true
+			escape = '\r'
+		case '\n':
+			flag = true
+			escape = '\n'
+		case '\\':
+			flag = true
+			escape = '\\'
+		case '\'':
+			flag = true
+			escape = '\''
+		case '"':
+			flag = true
+			escape = '"'
+		case '\032':
+			flag = true
+			escape = 'Z'
+		default:
+		}
+		if flag {
+			desc[j] = '\\'
+			desc[j+1] = escape
+			j = j + 2
+		} else {
+			desc[j] = tempStr[i]
+			j = j + 1
+		}
+	}
+	return string(desc[0:j])
+}
+
+// Escape like C API mysql_escape_string()
+func Escape(source string, NoBackslashEscapes bool) string {
+	// NoBackslashEscapes https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_no_backslash_escapes
+	// TODO: NoBackslashEscapes always false
+	if NoBackslashEscapes {
+		return quoteEscape(source)
+	}
+	return stringEscape(source)
 }

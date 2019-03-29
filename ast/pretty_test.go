@@ -17,14 +17,13 @@
 package ast
 
 import (
-	"flag"
 	"fmt"
 	"testing"
 
 	"github.com/XiaoMi/soar/common"
-)
 
-var update = flag.Bool("update", false, "update .golden files")
+	"vitess.io/vitess/go/vt/sqlparser"
+)
 
 var TestSqlsPretty = []string{
 	"select sourcetable, if(f.lastcontent = ?, f.lastupdate, f.lastcontent) as lastactivity, f.totalcount as activity, type.class as type, (f.nodeoptions & ?) as nounsubscribe from node as f inner join contenttype as type on type.contenttypeid = f.contenttypeid inner join subscribed as sd on sd.did = f.nodeid and sd.userid = ? union all select f.name as title, f.userid as keyval, ? as sourcetable, ifnull(f.lastpost, f.joindate) as lastactivity, f.posts as activity, ? as type, ? as nounsubscribe from user as f inner join userlist as ul on ul.relationid = f.userid and ul.userid = ? where ul.type = ? and ul.aq = ? order by title limit ?",
@@ -126,18 +125,25 @@ var TestSqlsPretty = []string{
 }
 
 func TestPretty(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	err := common.GoldenDiff(func() {
 		for _, sql := range append(TestSqlsPretty, common.TestSQLs...) {
 			fmt.Println(sql)
 			fmt.Println(Pretty(sql, "builtin"))
 		}
+		orgMaxPrettySQLLength := common.Config.MaxPrettySQLLength
+		common.Config.MaxPrettySQLLength = 1
+		fmt.Println(Pretty("select 1", "builtin"))
+		common.Config.MaxPrettySQLLength = orgMaxPrettySQLLength
 	}, t.Name(), update)
 	if nil != err {
 		t.Fatal(err)
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestIsKeyword(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	tks := map[string]bool{
 		"AGAINST":        true,
 		"AUTO_INCREMENT": true,
@@ -153,37 +159,17 @@ func TestIsKeyword(t *testing.T) {
 			t.Error("isKeyword:", tk)
 		}
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
-func TestMysqlEscapeString(t *testing.T) {
-	var strs = []map[string]string{
-		{
-			"input":  "abc",
-			"output": "abc",
-		},
-		{
-			"input":  "'abc",
-			"output": "\\'abc",
-		},
-		{
-			"input": `
-abc`,
-			"output": `\
-abc`,
-		},
-		{
-			"input":  "\"abc",
-			"output": "\\\"abc",
-		},
-	}
-	for _, str := range strs {
-		output, err := MysqlEscapeString(str["input"])
-		if err != nil {
-			t.Error("TestMysqlEscapeString", err)
-		} else {
-			if output != str["output"] {
-				t.Error("TestMysqlEscapeString", output, str["output"])
-			}
+func TestRemoveComments(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
+	for _, sql := range TestSqlsPretty {
+		stmt, _ := sqlparser.Parse(sql)
+		newSQL := sqlparser.String(stmt)
+		if newSQL != sql {
+			fmt.Print(newSQL)
 		}
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }

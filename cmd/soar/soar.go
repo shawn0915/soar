@@ -28,10 +28,9 @@ import (
 	"github.com/XiaoMi/soar/database"
 	"github.com/XiaoMi/soar/env"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/kr/pretty"
 	"github.com/percona/go-mysql/query"
-	"github.com/ziutek/mymysql/mysql"
-	"vitess.io/vitess/go/vt/sqlparser"
 )
 
 func main() {
@@ -68,7 +67,7 @@ func main() {
 
 	// 当程序卡死的时候，或者由于某些原因程序没有退出，可以通过捕获信号量的形式让程序优雅退出并且清理测试环境
 	common.HandleSignal(func() {
-		shutdown(vEnv)
+		shutdown(vEnv, rEnv)
 	})
 
 	// 对指定的库表进行索引重复检查
@@ -107,7 +106,7 @@ func main() {
 		mysqlSuggest := make(map[string]advisor.Rule)     // MySQL 返回的 ERROR 信息
 
 		if buf == "" {
-			common.Log.Debug("buf: %s, sql: %s empty", buf, sql)
+			common.Log.Debug("Ending, buf: '%s', sql: '%s'", buf, sql)
 			break
 		}
 		// 查询请求切分
@@ -143,19 +142,20 @@ func main() {
 			fmt.Println(ast.Compress(sql) + common.Config.Delimiter)
 			continue
 		case "ast":
-			// SQL 抽象语法树
-			var tree sqlparser.Statement
-			tree, err = sqlparser.Parse(sql)
-			if err != nil {
-				fmt.Println(err)
-			} else {
-				_, err = pretty.Println(tree)
-				common.LogIfWarn(err, "")
-			}
+			// print vitess AST data struct
+			ast.PrintPrettyVitessStmtNode(sql)
+			continue
+		case "ast-json":
+			// print vitess SQL AST into json format
+			fmt.Println(ast.VitessStmtNode2JSON(sql))
 			continue
 		case "tiast":
-			// TiDB SQL 抽象语法树
+			// print TiDB AST data struct
 			ast.PrintPrettyStmtNode(sql, "", "")
+			continue
+		case "tiast-json":
+			// print TiDB SQL AST into json format
+			fmt.Println(ast.StmtNode2JSON(sql, "", ""))
 			continue
 		case "tokenize":
 			// SQL 切词
@@ -185,7 +185,7 @@ func main() {
 		if syntaxErr != nil {
 			errContent := fmt.Sprintf("At SQL %d : %v", sqlCounter, syntaxErr)
 			common.Log.Warning(errContent)
-			if common.Config.OnlySyntaxCheck {
+			if common.Config.OnlySyntaxCheck || common.Config.ReportType == "rewrite" {
 				fmt.Println(errContent)
 				os.Exit(1)
 			}
@@ -240,7 +240,7 @@ func main() {
 						}
 					} else {
 						// 根据错误号输出建议
-						switch vEnv.Error.(*mysql.Error).Code {
+						switch vEnv.Error.(*mysql.MySQLError).Number {
 						case 1061:
 							idxSuggest["IDX.001"] = advisor.Rule{
 								Item:     "IDX.001",
@@ -425,8 +425,5 @@ func main() {
 		return
 	}
 
-	// syntax check verbose mode, add output for success!
-	if common.Config.OnlySyntaxCheck && common.Config.Verbose {
-		fmt.Println("Syntax check OK!")
-	}
+	verboseInfo()
 }

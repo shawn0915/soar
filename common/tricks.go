@@ -20,12 +20,13 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+
+	"github.com/tidwall/gjson"
 )
 
 // GoldenDiff 从 gofmt 学来的测试方法
@@ -67,24 +68,22 @@ func captureOutput(f func()) string {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
+	// copy the output in a separate goroutine so printing can't block indefinitely
+	outC := make(chan string)
+	go func() {
+		buf, err := ioutil.ReadAll(r)
+		if err != nil {
+			panic(err)
+		}
+		outC <- string(buf)
+	}()
+
 	// execute function
 	f()
 
-	outC := make(chan string)
-	// copy the output in a separate goroutine so printing can't block indefinitely
-	go func() {
-		var buf bytes.Buffer
-		_, err := io.Copy(&buf, r)
-		if err != nil {
-			Log.Warning(err.Error())
-		}
-		outC <- buf.String()
-	}()
-
 	// back to normal state
-	err := w.Close()
-	if err != nil {
-		Log.Warning(err.Error())
+	if err := w.Close(); err != nil {
+		panic(err)
 	}
 	os.Stdout = oldStdout // restoring the real stdout
 	out := <-outC
@@ -106,4 +105,36 @@ func SortedKey(m interface{}) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// jsonFind internal function
+func jsonFind(json string, name string, find *[]string) (next []string) {
+	res := gjson.Parse(json)
+	res.ForEach(func(key, value gjson.Result) bool {
+		if key.String() == name {
+			*find = append(*find, value.String())
+		} else {
+			switch value.Type {
+			case gjson.Number, gjson.True, gjson.False, gjson.Null:
+			default:
+				next = append(next, value.String())
+			}
+		}
+		return true // keep iterating
+	})
+	return next
+}
+
+// JSONFind iterate find name in json
+func JSONFind(json string, name string) []string {
+	var find []string
+	next := []string{json}
+	for len(next) > 0 {
+		var tmpNext []string
+		for _, subJSON := range next {
+			tmpNext = append(tmpNext, jsonFind(subJSON, name, &find)...)
+		}
+		next = tmpNext
+	}
+	return find
 }

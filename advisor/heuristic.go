@@ -31,6 +31,7 @@ import (
 	"github.com/percona/go-mysql/query"
 	tidb "github.com/pingcap/parser/ast"
 	"github.com/pingcap/parser/mysql"
+	"github.com/tidwall/gjson"
 	"vitess.io/vitess/go/vt/sqlparser"
 )
 
@@ -309,7 +310,7 @@ func (idxAdv *IndexAdvisor) RuleImplicitConversion() Rule {
 			// 列与值比较
 			for _, val := range values {
 				if colList[0].DataType == "" {
-					common.Log.Debug("Can't get %s data type", colList[0].Name)
+					common.Log.Warn("Can't get %s data type", colList[0].Name)
 					break
 				}
 
@@ -1312,37 +1313,16 @@ func (q *Query4Audit) RuleLoadFile() Rule {
 func (q *Query4Audit) RuleMultiCompare() Rule {
 	var rule = q.RuleOK()
 	if q.TiStmt != nil {
-		for _, tiStmt := range q.TiStmt {
-			switch node := tiStmt.(type) {
-			case *tidb.SelectStmt:
-				switch where := node.Where.(type) {
-				case *tidb.BinaryOperationExpr:
-					switch where.L.(type) {
-					case *tidb.BinaryOperationExpr:
-						if where.Op.String() == "eq" {
-							rule = HeuristicRules["RES.009"]
-						}
-					}
-				}
-			case *tidb.UpdateStmt:
-				switch where := node.Where.(type) {
-				case *tidb.BinaryOperationExpr:
-					switch where.L.(type) {
-					case *tidb.BinaryOperationExpr:
-						if where.Op.String() == "eq" {
-							rule = HeuristicRules["RES.009"]
-						}
-					}
-				}
-			case *tidb.DeleteStmt:
-				switch where := node.Where.(type) {
-				case *tidb.BinaryOperationExpr:
-					switch where.L.(type) {
-					case *tidb.BinaryOperationExpr:
-						if where.Op.String() == "eq" {
-							rule = HeuristicRules["RES.009"]
-						}
-					}
+		json := ast.StmtNode2JSON(q.Query, "", "")
+		whereJSON := common.JSONFind(json, "Where")
+		for _, where := range whereJSON {
+			conds := []string{where}
+			conds = append(conds, common.JSONFind(where, "L")...)
+			conds = append(conds, common.JSONFind(where, "R")...)
+			for _, cond := range conds {
+				if gjson.Get(cond, "Op").Int() == 7 && gjson.Get(cond, "L.Op").Int() == 7 {
+					rule = HeuristicRules["RES.009"]
+					return rule
 				}
 			}
 		}
@@ -2059,7 +2039,7 @@ func (idxAdv *IndexAdvisor) RuleUpdatePrimaryKey() Rule {
 			if idxMeta == nil {
 				return rule
 			}
-			for _, idx := range idxMeta.IdxRows {
+			for _, idx := range idxMeta.Rows {
 				if idx.KeyName == "PRIMARY" {
 					if col.Name == idx.ColumnName {
 						rule = HeuristicRules["CLA.016"]
@@ -3414,7 +3394,6 @@ func (q *Query4Audit) RuleMaxTextColsCount() Rule {
 			}
 		}
 	}
-
 	if textColsCount > common.Config.MaxTextColsCount {
 		rule = HeuristicRules["COL.007"]
 	}
@@ -3437,20 +3416,9 @@ func (idxAdv *IndexAdvisor) RuleMaxTextColsCount() Rule {
 				return true, nil
 			}
 
-			tb := stmt.Table
-
-			// 此处的检查需要在测试环境中的临时数据库中进行检查
-			// 需要将测试环境 DSN 的数据库暂时指向临时数据库
-			// 为了防止影响切换数据库环境会影响接下来的测试，需要在检查完后将原配置还原
-			dbTmp := idxAdv.vEnv.Database
-			idxAdv.vEnv.Database = idxAdv.vEnv.DBRef[idxAdv.vEnv.Database]
-			defer func() {
-				idxAdv.vEnv.Database = dbTmp
-			}()
-
 			// 添加字段的语句会在初始化环境的时候被执行
-			// 只需要获取该标的 CREAET 语句，后再对该语句进行检查即可
-			ddl, err := idxAdv.vEnv.ShowCreateTable(tb.Name.String())
+			// 只需要获取该标的 CREATE 语句，后再对该语句进行检查即可
+			ddl, err := idxAdv.vEnv.ShowCreateTable(stmt.Table.Name.String())
 			if err != nil {
 				common.Log.Error("RuleMaxTextColsCount create statement got failed: %s", err.Error())
 				return false, err
@@ -3470,7 +3438,6 @@ func (idxAdv *IndexAdvisor) RuleMaxTextColsCount() Rule {
 		return true, nil
 	}, idxAdv.Ast)
 	common.LogIfError(err, "")
-
 	return rule
 }
 

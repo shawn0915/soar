@@ -67,7 +67,7 @@ func init() {
 		"SELECT * FROM customer WHERE address_id in (224,510) ORDER BY last_name;",                               //  INDEX(address_id)
 		"SELECT * FROM film WHERE release_year = 2016 AND length != 1 ORDER BY title;",                           //  INDEX(`release_year`, `length`, `title`)
 
-		// "Covering" IdxRows
+		// "Covering" Rows
 		"SELECT title FROM film WHERE release_year = 1995;",                               //  INDEX(release_year, title)",
 		"SELECT title, replacement_cost FROM film WHERE language_id = 5 AND length = 70;", //  INDEX(language_id, length, title, replacement_cos film ), title, replacement_cost顺序无关，language_id, length顺序视散粒度情况.
 		"SELECT title FROM film WHERE language_id > 5 AND length > 70;",                   //  INDEX(language_id, length, title) language_id or length first (that's as far as the Algorithm goes), then the other two fields afterwards.
@@ -136,12 +136,12 @@ func init() {
 		// SEMI JOIN
 		// 半连接： 当一张表在另一张表找到匹配的记录之后，半连接（semi-join）返回第一张表中的记录。
 		// 与条件连接相反，即使在右节点中找到几条匹配的记录，左节点的表也只会返回一条记录。
-		// 另外，右节点的表一条记录也不会返回。半连接通常使用IN  或 EXISTS 作为连接条件
-		"SELECT d.deptno,d.dname,d.loc FROM scott.dept d WHERE d.deptno IN  (SELECT e.deptno FROM scott.emp e);",
+		// 另外，右节点的表一条记录也不会返回。半连接通常使用 IN 或 EXISTS 作为连接条件
+		"SELECT a.address, a.postal_code FROM sakila.address a WHERE a.city_id IN  (SELECT c.city_id FROM sakila.city c);",
 
 		// Delayed Join
 		// https://www.percona.com/blog/2007/04/06/using-delayed-join-to-optimize-count-and-limit-queries/
-		`SELECT visitor_id, url FROM (SELECT id FROM log WHERE ip="123.45.67.89" order by ts desc limit 50, 10) I JOIN log ON (I.id=log.id) JOIN url ON (url.id=log.url_id) order by TS desc;`,
+		`SELECT city FROM( SELECT city_id FROM city WHERE city = "A Corua (La Corua)" ORDER BY last_update DESC LIMIT 50, 10) I JOIN city ON (I.city_id = city.city_id) JOIN country ON (country.country_id = city.country_id) ORDER BY city DESC;`,
 
 		// DELETE
 		"DELETE city, country FROM city INNER JOIN country using (country_id) WHERE city.city_id = 1;",
@@ -196,7 +196,7 @@ func init() {
 		"alter table inventory add index `idx_store_film` (`store_id`,`film_id`),add index `idx_store_film` (`store_id`,`film_id`),add index `idx_store_film` (`store_id`,`film_id`);",
 
 		// https://github.com/XiaoMi/soar/issues/47
-		`SELECT	DATE_FORMAT(t.atm, '%Y-%m-%d'),	COUNT(DISTINCT (t.usr))	FROM usr_terminal t WHERE t.atm > '2018-10-22 00:00:00'	AND t.agent LIKE '%Chrome%'	AND t.system = 'eip' GROUP BY DATE_FORMAT(t.atm, '%Y-%m-%d') ORDER BY DATE_FORMAT(t.atm, '%Y-%m-%d');`,
+		`SELECT	DATE_FORMAT(t.last_update, '%Y-%m-%d'),	COUNT(DISTINCT (t.city))	FROM city t WHERE t.last_update > '2018-10-22 00:00:00'	AND t.city LIKE '%Chrome%'	AND t.city = 'eip' GROUP BY DATE_FORMAT(t.last_update, '%Y-%m-%d') ORDER BY DATE_FORMAT(t.last_update, '%Y-%m-%d');`,
 		// https://github.com/XiaoMi/soar/issues/17
 		"create table hello.t (id int unsigned);",
 

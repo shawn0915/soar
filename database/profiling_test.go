@@ -25,29 +25,25 @@ import (
 )
 
 func TestProfiling(t *testing.T) {
-	common.Config.QueryTimeOut = 1
-	res, err := connTest.Profiling("select 1")
-	if err == nil {
-		pretty.Println(res)
-	} else {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
+	rows, err := connTest.Profiling("select 1")
+	if err != nil {
 		t.Error(err)
 	}
+	pretty.Println(rows)
+	_, err = connTest.Profiling("delete from film")
+	if err == nil {
+		t.Error(err)
+	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestFormatProfiling(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	res, err := connTest.Profiling("select 1")
-	if err == nil {
-		pretty.Println(FormatProfiling(res))
-	} else {
+	if err != nil {
 		t.Error(err)
 	}
-}
-
-func TestGetProfiling(t *testing.T) {
-	res, err := connTest.Profiling("select 1")
-	if err == nil {
-		pretty.Println(getProfiling(res))
-	} else {
-		t.Error(err)
-	}
+	pretty.Println(FormatProfiling(res))
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }

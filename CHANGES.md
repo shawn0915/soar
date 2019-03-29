@@ -1,9 +1,33 @@
 # CHANGELOG
 
-## 2018-12
+## 2019-01
 
 - DOING: english translation
+- add mysql environment verbose info
+- add JSONFind function, which support JSON iterate
+- add new test database `world_x`
+- SplitStatement support optimizer hint `/*+xxx */`
+- include [bats](https://github.com/bats-core/bats-core) bash auto test framework
+- fix #173 with JSONFind `WHERE col = col = '' and col1 = 'xx'`
+- fix #184 table status field datatype overflow
+- fix explain result with multi rows error
+- fix #178 JSON datatype only support utf8mb4
 
+## 2018-12
+
+- replace mysql database driver mymysql with go-sql-driver
+- add new -report-type [ast-json, tiast-json]
+- command line dsn args support '@', '/', ':' in password
+- add new heuristic rule RES.009, "SELECT * FROM tbl WHERE col = col = 'abc'"
+- add new heuristic rule RuleColumnNotAllowType COL.018
+- add string escape function for security
+- fix #122 single table select * don't auto-complete table name
+- fix #171 support socket access type
+- fix #58 sampling not deal with NULL able string
+- fix #172 compatible with mysql 5.1, which explain has no Index_Comment column
+- fix #163 column.Tp may be nil, which may raise panic
+- fix #151 bit type not config as int, when two columns compare will give ARG.003 suggestion.
+- 
 ## 2018-11
 
 - add all third-party lib into vendor

@@ -21,7 +21,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/XiaoMi/soar/common"
 )
@@ -36,38 +35,39 @@ type TableStatInfo struct {
 }
 
 // tableStatusRow 用于 show table status value
+// use []byte instead of string, because []byte allow to be null, string not
 type tableStatusRow struct {
 	Name         string // 表名
-	Engine       string // 该表使用的存储引擎
-	Version      int    // 该表的 .frm 文件版本号
-	RowFormat    string // 该表使用的行存储格式
-	Rows         int64  // 表行数, InnoDB 引擎中为预估值，甚至可能会有40%~50%的数值偏差
-	AvgRowLength int    // 平均行长度
+	Engine       []byte // 该表使用的存储引擎
+	Version      []byte // 该表的 .frm 文件版本号
+	RowFormat    []byte // 该表使用的行存储格式
+	Rows         uint64 // 表行数, InnoDB 引擎中为预估值，甚至可能会有40%~50%的数值偏差
+	AvgRowLength uint64 // 平均行长度
 
 	// MyISAM: Data_length 为数据文件的大小，单位为 bytes
 	// InnoDB: Data_length 为聚簇索引分配的近似内存量，单位为 bytes, 计算方式为聚簇索引数量乘以 InnoDB 页面大小
 	// 其他不同的存储引擎中该值的意义可能不尽相同
-	DataLength int
+	DataLength uint64
 
 	// MyISAM: Max_data_length 为数据文件长度的最大值。这是在给定使用的数据指针大小的情况下，可以存储在表中的数据的最大字节数
 	// InnoDB: 未使用
 	// 其他不同的存储引擎中该值的意义可能不尽相同
-	MaxDataLength int
+	MaxDataLength uint64
 
 	// MyISAM: Index_length 为 index 文件的大小，单位为 bytes
 	// InnoDB: Index_length 为非聚簇索引分配的近似内存量，单位为 bytes，计算方式为非聚簇索引数量乘以 InnoDB 页面大小
 	// 其他不同的存储引擎中该值的意义可能不尽相同
-	IndexLength int
+	IndexLength uint64
 
-	DataFree      int       // 已分配但未使用的字节数
-	AutoIncrement int       // 下一个自增值
-	CreateTime    time.Time // 创建时间
-	UpdateTime    time.Time // 最近一次更新时间，该值不准确
-	CheckTime     time.Time // 上次检查时间
-	Collation     string    // 字符集及排序规则信息
-	Checksum      string    // 校验和
-	CreateOptions string    // 创建表的时候的时候一切其他属性
-	Comment       string    // 注释
+	DataFree      uint64 // 已分配但未使用的字节数
+	AutoIncrement []byte // 下一个自增值
+	CreateTime    []byte // 创建时间
+	UpdateTime    []byte // 最近一次更新时间，该值不准确
+	CheckTime     []byte // 上次检查时间
+	Collation     []byte // 字符集及排序规则信息
+	Checksum      []byte // 校验和
+	CreateOptions []byte // 创建表的时候的时候一切其他属性
+	Comment       []byte // 注释
 }
 
 // newTableStat 构造 table Stat 对象
@@ -83,7 +83,7 @@ func (db *Connector) ShowTables() ([]string, error) {
 	defer func() {
 		err := recover()
 		if err != nil {
-			common.Log.Error("recover ShowTableStatus()", err)
+			common.Log.Error("recover ShowTables()", err)
 		}
 	}()
 
@@ -95,76 +95,73 @@ func (db *Connector) ShowTables() ([]string, error) {
 
 	// 获取值
 	var tables []string
-	for _, row := range res.Rows {
-		tables = append(tables, row.Str(0))
+	for res.Rows.Next() {
+		var table string
+		err = res.Rows.Scan(&table)
+		if err != nil {
+			break
+		}
+		tables = append(tables, table)
 	}
-
+	res.Rows.Close()
 	return tables, err
 }
 
 // ShowTableStatus 执行 show table status
 func (db *Connector) ShowTableStatus(tableName string) (*TableStatInfo, error) {
-	defer func() {
-		err := recover()
-		if err != nil {
-			common.Log.Error("recover ShowTableStatus()", err)
-		}
-	}()
-
 	// 初始化struct
-	ts := newTableStat(tableName)
+	tbStatus := newTableStat(tableName)
 
 	// 执行 show table status
-	res, err := db.Query("show table status where name = '%s'", ts.Name)
+	res, err := db.Query(fmt.Sprintf("show table status where name = '%s'", Escape(tbStatus.Name, false)))
 	if err != nil {
-		return ts, err
+		return tbStatus, err
 	}
 
-	rs := res.Result.Map("Rows")
-	name := res.Result.Map("Name")
-	df := res.Result.Map("Data_free")
-	sum := res.Result.Map("Checksum")
-	engine := res.Result.Map("Engine")
-	version := res.Result.Map("Version")
-	comment := res.Result.Map("Comment")
-	ai := res.Result.Map("Auto_increment")
-	collation := res.Result.Map("Collation")
-	rowFormat := res.Result.Map("Row_format")
-	checkTime := res.Result.Map("Check_time")
-	dataLength := res.Result.Map("Data_length")
-	idxLength := res.Result.Map("Index_length")
-	createTime := res.Result.Map("Create_time")
-	updateTime := res.Result.Map("Update_time")
-	options := res.Result.Map("Create_options")
-	avgRowLength := res.Result.Map("Avg_row_length")
-	maxDataLength := res.Result.Map("Max_data_length")
-
-	// 获取值
-	for _, row := range res.Rows {
-		value := tableStatusRow{
-			Name:          row.Str(name),
-			Engine:        row.Str(engine),
-			Version:       row.Int(version),
-			Rows:          row.Int64(rs),
-			RowFormat:     row.Str(rowFormat),
-			AvgRowLength:  row.Int(avgRowLength),
-			DataLength:    row.Int(dataLength),
-			MaxDataLength: row.Int(maxDataLength),
-			IndexLength:   row.Int(idxLength),
-			DataFree:      row.Int(df),
-			AutoIncrement: row.Int(ai),
-			CreateTime:    row.Time(createTime, time.Local),
-			UpdateTime:    row.Time(updateTime, time.Local),
-			CheckTime:     row.Time(checkTime, time.Local),
-			Collation:     row.Str(collation),
-			Checksum:      row.Str(sum),
-			CreateOptions: row.Str(options),
-			Comment:       row.Str(comment),
+	// columns info
+	ts := tableStatusRow{}
+	statusFields := make([]interface{}, 0)
+	fields := map[string]interface{}{
+		"Name":            &ts.Name,
+		"Engine":          &ts.Engine,
+		"Version":         &ts.Version,
+		"Row_format":      &ts.RowFormat,
+		"Rows":            &ts.Rows,
+		"Avg_row_length":  &ts.AvgRowLength,
+		"Data_length":     &ts.DataLength,
+		"Max_data_length": &ts.MaxDataLength,
+		"Index_length":    &ts.IndexLength,
+		"Data_free":       &ts.DataFree,
+		"Auto_increment":  &ts.AutoIncrement,
+		"Create_time":     &ts.CreateTime,
+		"Update_time":     &ts.UpdateTime,
+		"Check_time":      &ts.CheckTime,
+		"Collation":       &ts.Collation,
+		"Checksum":        &ts.Checksum,
+		"Create_options":  &ts.CreateOptions,
+		"Comment":         &ts.Comment,
+	}
+	cols, err := res.Rows.Columns()
+	common.LogIfError(err, "")
+	var colByPass []byte
+	for _, col := range cols {
+		if _, ok := fields[col]; ok {
+			statusFields = append(statusFields, fields[col])
+		} else {
+			common.Log.Debug("ShowTableStatus by pass column %s", col)
+			statusFields = append(statusFields, &colByPass)
 		}
-		ts.Rows = append(ts.Rows, value)
 	}
-
-	return ts, err
+	// 获取值
+	for res.Rows.Next() {
+		err := res.Rows.Scan(statusFields...)
+		if err != nil {
+			common.Log.Debug(err.Error())
+		}
+		tbStatus.Rows = append(tbStatus.Rows, ts)
+	}
+	res.Rows.Close()
+	return tbStatus, err
 }
 
 // https://dev.mysql.com/doc/refman/5.7/en/show-index.html
@@ -172,10 +169,10 @@ func (db *Connector) ShowTableStatus(tableName string) (*TableStatInfo, error) {
 // TableIndexInfo 用以保存 show index 之后获取的 index 信息
 type TableIndexInfo struct {
 	TableName string
-	IdxRows   []TableIndexRow
+	Rows      []TableIndexRow
 }
 
-// TableIndexRow 用以存放show index之后获取的每一条index信息
+// TableIndexRow 用以存放show index 之后获取的每一条 index 信息
 type TableIndexRow struct {
 	Table        string // 表名
 	NonUnique    int    // 0：unique key，1：not unique
@@ -190,13 +187,15 @@ type TableIndexRow struct {
 	IndexType    string // BTREE, FULLTEXT, HASH, RTREE
 	Comment      string
 	IndexComment string
+	Visible      string
+	Expression   []byte
 }
 
 // NewTableIndexInfo 构造 TableIndexInfo
 func NewTableIndexInfo(tableName string) *TableIndexInfo {
 	return &TableIndexInfo{
 		TableName: tableName,
-		IdxRows:   make([]TableIndexRow, 0),
+		Rows:      make([]TableIndexRow, 0),
 	}
 }
 
@@ -204,45 +203,56 @@ func NewTableIndexInfo(tableName string) *TableIndexInfo {
 func (db *Connector) ShowIndex(tableName string) (*TableIndexInfo, error) {
 	tbIndex := NewTableIndexInfo(tableName)
 
+	if db.Database == "" || tableName == "" {
+		return nil, fmt.Errorf("database('%s') or table('%s') name should not empty", db.Database, tableName)
+	}
+
 	// 执行 show create table
-	res, err := db.Query("show index from `%s`.`%s`", db.Database, tableName)
+	res, err := db.Query(fmt.Sprintf("show index from `%s`.`%s`", Escape(db.Database, false), Escape(tableName, false)))
 	if err != nil {
 		return nil, err
 	}
 
-	table := res.Result.Map("Table")
-	unique := res.Result.Map("Non_unique")
-	keyName := res.Result.Map("Key_name")
-	seq := res.Result.Map("Seq_in_index")
-	cName := res.Result.Map("Column_name")
-	collation := res.Result.Map("Collation")
-	cardinality := res.Result.Map("Cardinality")
-	subPart := res.Result.Map("Sub_part")
-	packed := res.Result.Map("Packed")
-	null := res.Result.Map("Null")
-	idxType := res.Result.Map("Index_type")
-	comment := res.Result.Map("Comment")
-	idxComment := res.Result.Map("Index_comment")
-
-	// 获取值
-	for _, row := range res.Rows {
-		value := TableIndexRow{
-			Table:        row.Str(table),
-			NonUnique:    row.Int(unique),
-			KeyName:      row.Str(keyName),
-			SeqInIndex:   row.Int(seq),
-			ColumnName:   row.Str(cName),
-			Collation:    row.Str(collation),
-			Cardinality:  row.Int(cardinality),
-			SubPart:      row.Int(subPart),
-			Packed:       row.Int(packed),
-			Null:         row.Str(null),
-			IndexType:    row.Str(idxType),
-			Comment:      row.Str(comment),
-			IndexComment: row.Str(idxComment),
-		}
-		tbIndex.IdxRows = append(tbIndex.IdxRows, value)
+	// columns info
+	ti := TableIndexRow{}
+	indexFields := make([]interface{}, 0)
+	fields := map[string]interface{}{
+		"Table":         &ti.Table,
+		"Non_unique":    &ti.NonUnique,
+		"Key_name":      &ti.KeyName,
+		"Seq_in_index":  &ti.SeqInIndex,
+		"Column_name":   &ti.ColumnName,
+		"Collation":     &ti.Collation,
+		"Cardinality":   &ti.Cardinality,
+		"Sub_part":      &ti.SubPart,
+		"Packed":        &ti.Packed,
+		"Null":          &ti.Null,
+		"Index_type":    &ti.IndexType,
+		"Comment":       &ti.Comment,
+		"Index_comment": &ti.IndexComment,
+		"Visible":       &ti.Visible,
+		"Expression":    &ti.Expression,
 	}
+	cols, err := res.Rows.Columns()
+	common.LogIfError(err, "")
+	var colByPass []byte
+	for _, col := range cols {
+		if _, ok := fields[col]; ok {
+			indexFields = append(indexFields, fields[col])
+		} else {
+			common.Log.Debug("ShowIndex by pass column %s", col)
+			indexFields = append(indexFields, &colByPass)
+		}
+	}
+	// 获取值
+	for res.Rows.Next() {
+		err := res.Rows.Scan(indexFields...)
+		if err != nil {
+			common.Log.Debug(err.Error())
+		}
+		tbIndex.Rows = append(tbIndex.Rows, ti)
+	}
+	res.Rows.Close()
 	return tbIndex, err
 }
 
@@ -257,7 +267,7 @@ const (
 	IndexNonUnique  = IndexSelectKey("NonUnique")  // 唯一索引
 )
 
-// FindIndex 获取TableIndexInfo中需要的索引
+// FindIndex 获取 TableIndexInfo 中需要的索引
 func (tbIndex *TableIndexInfo) FindIndex(arg IndexSelectKey, value string) []TableIndexRow {
 	var result []TableIndexRow
 	if tbIndex == nil {
@@ -268,28 +278,28 @@ func (tbIndex *TableIndexInfo) FindIndex(arg IndexSelectKey, value string) []Tab
 
 	switch arg {
 	case IndexKeyName:
-		for _, index := range tbIndex.IdxRows {
+		for _, index := range tbIndex.Rows {
 			if strings.ToLower(index.KeyName) == value {
 				result = append(result, index)
 			}
 		}
 
 	case IndexColumnName:
-		for _, index := range tbIndex.IdxRows {
+		for _, index := range tbIndex.Rows {
 			if strings.ToLower(index.ColumnName) == value {
 				result = append(result, index)
 			}
 		}
 
 	case IndexIndexType:
-		for _, index := range tbIndex.IdxRows {
+		for _, index := range tbIndex.Rows {
 			if strings.ToLower(index.IndexType) == value {
 				result = append(result, index)
 			}
 		}
 
 	case IndexNonUnique:
-		for _, index := range tbIndex.IdxRows {
+		for _, index := range tbIndex.Rows {
 			unique := strconv.Itoa(index.NonUnique)
 			if unique == value {
 				result = append(result, index)
@@ -316,12 +326,12 @@ type TableDesc struct {
 type TableDescValue struct {
 	Field      string // 列名
 	Type       string // 数据类型
+	Collation  []byte // 字符集
 	Null       string // 是否有NULL（NO、YES）
-	Collation  string // 字符集
-	Privileges string // 权限s
 	Key        string // 键类型
-	Default    string // 默认值
+	Default    []byte // 默认值
 	Extra      string // 其他
+	Privileges string // 权限
 	Comment    string // 备注
 }
 
@@ -338,36 +348,45 @@ func (db *Connector) ShowColumns(tableName string) (*TableDesc, error) {
 	tbDesc := NewTableDesc(tableName)
 
 	// 执行 show create table
-	res, err := db.Query("show full columns from `%s`.`%s`", db.Database, tableName)
+	res, err := db.Query(fmt.Sprintf("show full columns from `%s`.`%s`", Escape(db.Database, false), Escape(tableName, false)))
 	if err != nil {
 		return nil, err
 	}
 
-	field := res.Result.Map("Field")
-	tp := res.Result.Map("Type")
-	null := res.Result.Map("Null")
-	key := res.Result.Map("Key")
-	def := res.Result.Map("Default")
-	extra := res.Result.Map("Extra")
-	collation := res.Result.Map("Collation")
-	privileges := res.Result.Map("Privileges")
-	comm := res.Result.Map("Comment")
-
-	// 获取值
-	for _, row := range res.Rows {
-		value := TableDescValue{
-			Field:      row.Str(field),
-			Type:       row.Str(tp),
-			Null:       row.Str(null),
-			Key:        row.Str(key),
-			Default:    row.Str(def),
-			Extra:      row.Str(extra),
-			Privileges: row.Str(privileges),
-			Collation:  row.Str(collation),
-			Comment:    row.Str(comm),
-		}
-		tbDesc.DescValues = append(tbDesc.DescValues, value)
+	// columns info
+	tc := TableDescValue{}
+	columnFields := make([]interface{}, 0)
+	fields := map[string]interface{}{
+		"Field":      &tc.Field,
+		"Type":       &tc.Type,
+		"Collation":  &tc.Collation,
+		"Null":       &tc.Null,
+		"Key":        &tc.Key,
+		"Default":    &tc.Default,
+		"Extra":      &tc.Extra,
+		"Privileges": &tc.Privileges,
+		"Comment":    &tc.Comment,
 	}
+	cols, err := res.Rows.Columns()
+	common.LogIfError(err, "")
+	var colByPass []byte
+	for _, col := range cols {
+		if _, ok := fields[col]; ok {
+			columnFields = append(columnFields, fields[col])
+		} else {
+			common.Log.Debug("ShowColumns by pass column %s", col)
+			columnFields = append(columnFields, &colByPass)
+		}
+	}
+	// 获取值
+	for res.Rows.Next() {
+		err := res.Rows.Scan(columnFields...)
+		if err != nil {
+			common.Log.Debug(err.Error())
+		}
+		tbDesc.DescValues = append(tbDesc.DescValues, tc)
+	}
+	res.Rows.Close()
 	return tbDesc, err
 }
 
@@ -382,19 +401,51 @@ func (td TableDesc) Columns() []string {
 
 // showCreate show create
 func (db *Connector) showCreate(createType, name string) (string, error) {
-	// 执行 show create table
-	res, err := db.Query("show create %s `%s`", createType, name)
+	// SHOW CREATE DATABASE db_name
+	// SHOW CREATE EVENT event_name
+	// SHOW CREATE FUNCTION func_name
+	// SHOW CREATE PROCEDURE proc_name
+	// SHOW CREATE TABLE tbl_name
+	// SHOW CREATE TRIGGER trigger_name
+	// SHOW CREATE VIEW view_name
+	res, err := db.Query(fmt.Sprintf("SHOW CREATE %s `%s`", createType, Escape(name, false)))
 	if err != nil {
 		return "", err
 	}
 
-	// 获取ddl
-	var ddl string
-	for _, row := range res.Rows {
-		ddl = row.Str(1)
+	// columns info
+	var create string
+	createFields := make([]interface{}, 0)
+	fields := map[string]interface{}{
+		"Create View":      &create,
+		"Create Table":     &create,
+		"Create Database":  &create,
+		"Create Event":     &create,
+		"Statement":        &create, // show create trigger
+		"Create Function":  &create,
+		"Create Procedure": &create,
+	}
+	cols, err := res.Rows.Columns()
+	common.LogIfError(err, "")
+	var colByPass []byte
+	for _, col := range cols {
+		if _, ok := fields[col]; ok {
+			createFields = append(createFields, fields[col])
+		} else {
+			common.Log.Debug("showCreate Type: %s, Name: %s, by pass column `%s`", createType, name, col)
+			createFields = append(createFields, &colByPass)
+		}
 	}
 
-	return ddl, err
+	// 获取 CREATE 语句
+	for res.Rows.Next() {
+		err := res.Rows.Scan(createFields...)
+		if err != nil {
+			common.Log.Debug(err.Error())
+		}
+	}
+	res.Rows.Close()
+	return create, err
 }
 
 // ShowCreateDatabase show create database
@@ -417,30 +468,30 @@ func (db *Connector) ShowCreateTable(tableName string) (string, error) {
 		}
 	}()
 
-	ddl, err := db.showCreate("table", tableName)
+	ddl, err := db.showCreate("TABLE", tableName)
 
 	// 去除外键关联条件
-	var noConstraint []string
-	relationReg, _ := regexp.Compile("CONSTRAINT")
-	for _, line := range strings.Split(ddl, "\n") {
-
-		if relationReg.Match([]byte(line)) {
-			continue
+	lines := strings.Split(ddl, "\n")
+	// CREATE VIEW ONLY 1 LINE
+	if len(lines) > 2 {
+		var noConstraint []string
+		relationReg, _ := regexp.Compile("CONSTRAINT")
+		for _, line := range lines[1 : len(lines)-1] {
+			if relationReg.Match([]byte(line)) {
+				continue
+			}
+			line = strings.TrimSuffix(line, ",")
+			noConstraint = append(noConstraint, line)
 		}
 
 		// 去除外键语句会使DDL中多一个','导致语法错误，要把多余的逗号去除
-		if strings.Index(line, ")") == 0 {
-			lineWrongSyntax := noConstraint[len(noConstraint)-1]
-			// 如果')'前一句的末尾是',' 删除 ',' 保证语法正确性
-			if strings.Index(lineWrongSyntax, ",") == len(lineWrongSyntax)-1 {
-				noConstraint[len(noConstraint)-1] = lineWrongSyntax[:len(lineWrongSyntax)-1]
-			}
-		}
-
-		noConstraint = append(noConstraint, line)
+		ddl = fmt.Sprint(
+			lines[0], "\n",
+			strings.Join(noConstraint, ",\n"), "\n",
+			lines[len(lines)-1],
+		)
 	}
-
-	return strings.Join(noConstraint, "\n"), err
+	return ddl, err
 }
 
 // FindColumn find column
@@ -449,85 +500,92 @@ func (db *Connector) FindColumn(name, dbName string, tables ...string) ([]*commo
 	var columns []*common.Column
 	sql := fmt.Sprintf("SELECT "+
 		"c.TABLE_NAME,c.TABLE_SCHEMA,c.COLUMN_TYPE,c.CHARACTER_SET_NAME, c.COLLATION_NAME "+
-		"FROM `INFORMATION_SCHEMA`.`COLUMNS` as c where c.COLUMN_NAME = '%s' ", name)
+		"FROM `INFORMATION_SCHEMA`.`COLUMNS` as c where c.COLUMN_NAME = '%s' ", Escape(name, false))
+
+	if dbName != "" {
+		sql += fmt.Sprintf(" and c.table_schema = '%s'", Escape(dbName, false))
+	}
 
 	if len(tables) > 0 {
 		var tmp []string
 		for _, table := range tables {
-			tmp = append(tmp, "'"+table+"'")
+			tmp = append(tmp, "'"+Escape(table, false)+"'")
 		}
 		sql += fmt.Sprintf(" and c.table_name in (%s)", strings.Join(tmp, ","))
 	}
 
-	if dbName != "" {
-		sql += fmt.Sprintf(" and c.table_schema = '%s'", dbName)
-	}
-
+	common.Log.Debug("FindColumn, execute SQL: %s", sql)
 	res, err := db.Query(sql)
 	if err != nil {
 		common.Log.Error("(db *Connector) FindColumn Error : ", err)
 		return columns, err
 	}
 
-	tbName := res.Result.Map("TABLE_NAME")
-	schema := res.Result.Map("TABLE_SCHEMA")
-	colTyp := res.Result.Map("COLUMN_TYPE")
-	colCharset := res.Result.Map("CHARACTER_SET_NAME")
-	collation := res.Result.Map("COLLATION_NAME")
-
-	// 获取ddl
-	for _, row := range res.Rows {
-		col := &common.Column{
-			Name:      name,
-			Table:     row.Str(tbName),
-			DB:        row.Str(schema),
-			DataType:  row.Str(colTyp),
-			Character: row.Str(colCharset),
-			Collation: row.Str(collation),
+	var col common.Column
+	for res.Rows.Next() {
+		var character, collation []byte
+		err = res.Rows.Scan(&col.Table, &col.DB, &col.DataType, &character, &collation)
+		if err != nil {
+			break
 		}
-
+		col.Name = name
+		col.Character = string(character)
+		col.Collation = string(collation)
 		// 填充字符集和排序规则
 		if col.Character == "" {
-			// 当从`INFORMATION_SCHEMA`.`COLUMNS`表中查询不到相关列的character和collation的信息时
-			// 认为该列使用的character和collation与其所处的表一致
-			// 由于`INFORMATION_SCHEMA`.`TABLES`表中未找到表的character，所以从按照MySQL中collation的规则从中截取character
+			// 当从 `INFORMATION_SCHEMA`.`COLUMNS` 表中查询不到相关列的 character 和 collation 的信息时
+			// 认为该列使用的 character 和 collation 与其所处的表一致
+			// 由于 `INFORMATION_SCHEMA`.`TABLES` 表中未找到表的 character，所以从按照 MySQL 中 collation 的规则从中截取 character
 
 			sql = fmt.Sprintf("SELECT `t`.`TABLE_COLLATION` FROM `INFORMATION_SCHEMA`.`TABLES` AS `t` "+
-				"WHERE `t`.`TABLE_NAME`='%s' AND `t`.`TABLE_SCHEMA` = '%s'", col.Table, col.DB)
-			var newRes *QueryResult
+				"WHERE `t`.`TABLE_NAME`='%s' AND `t`.`TABLE_SCHEMA` = '%s'", Escape(col.Table, false), Escape(col.DB, false))
+
+			common.Log.Debug("FindColumn, execute SQL: %s", sql)
+			var newRes QueryResult
 			newRes, err = db.Query(sql)
 			if err != nil {
 				common.Log.Error("(db *Connector) FindColumn Error : ", err)
 				return columns, err
 			}
 
-			tbCollation := newRes.Rows[0].Str(0)
-			if tbCollation != "" {
-				col.Character = strings.Split(tbCollation, "_")[0]
-				col.Collation = tbCollation
+			var tbCollation []byte
+			if newRes.Rows.Next() {
+				err = newRes.Rows.Scan(&tbCollation)
+				if err != nil {
+					break
+				}
+			}
+			newRes.Rows.Close()
+			if string(tbCollation) != "" {
+				col.Character = strings.Split(string(tbCollation), "_")[0]
+				col.Collation = string(tbCollation)
 			}
 		}
-
-		columns = append(columns, col)
+		columns = append(columns, &col)
 	}
-
+	res.Rows.Close()
 	return columns, err
 }
 
-// IsFKey 判断列是否是外键
-func (db *Connector) IsFKey(dbName, tbName, column string) bool {
+// IsForeignKey 判断列是否是外键
+func (db *Connector) IsForeignKey(dbName, tbName, column string) bool {
 	sql := fmt.Sprintf("SELECT REFERENCED_COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE C "+
 		"WHERE REFERENCED_TABLE_SCHEMA <> 'NULL' AND"+
 		" TABLE_NAME='%s' AND"+
 		" TABLE_SCHEMA='%s' AND"+
-		" COLUMN_NAME='%s'", tbName, dbName, column)
+		" COLUMN_NAME='%s'", Escape(tbName, false), Escape(dbName, false), Escape(column, false))
 
+	common.Log.Debug("IsForeignKey, execute SQL: %s", sql)
 	res, err := db.Query(sql)
-	if err == nil && len(res.Rows) == 0 {
+	if err != nil {
+		common.Log.Error("IsForeignKey, Error: %s", err.Error())
 		return false
 	}
+	if res.Rows.Next() {
+		return true
+	}
 
-	return true
+	return false
 }
 
 // Reference 用于存储关系
@@ -535,50 +593,44 @@ type Reference map[string][]ReferenceValue
 
 // ReferenceValue 用于处理表之间的关系
 type ReferenceValue struct {
-	RefDBName      string // 夫表所属数据库
-	RefTable       string // 父表
-	DBName         string // 子表所属数据库
-	Table          string // 子表
-	ConstraintName string // 关系名称
+	ReferencedTableSchema string // 夫表所属数据库
+	ReferencedTableName   string // 父表
+	TableSchema           string // 子表所属数据库
+	TableName             string // 子表
+	ConstraintName        string // 关系名称
 }
 
 // ShowReference 查找所有的外键信息
 func (db *Connector) ShowReference(dbName string, tbName ...string) ([]ReferenceValue, error) {
 	var referenceValues []ReferenceValue
-	sql := `SELECT C.REFERENCED_TABLE_SCHEMA,C.REFERENCED_TABLE_NAME,C.TABLE_SCHEMA,C.TABLE_NAME,C.CONSTRAINT_NAME
-FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE C JOIN INFORMATION_SCHEMA. TABLES T ON T.TABLE_NAME = C.TABLE_NAME
-WHERE C.REFERENCED_TABLE_NAME IS NOT NULL`
-	sql = sql + fmt.Sprintf(` AND C.TABLE_SCHEMA = "%s"`, dbName)
+	sql := `SELECT DISTINCT C.REFERENCED_TABLE_SCHEMA,C.REFERENCED_TABLE_NAME,C.TABLE_SCHEMA,C.TABLE_NAME,C.CONSTRAINT_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE C JOIN INFORMATION_SCHEMA. TABLES T ON T.TABLE_NAME = C.TABLE_NAME WHERE C.REFERENCED_TABLE_NAME IS NOT NULL`
+	sql = sql + fmt.Sprintf(` AND C.TABLE_SCHEMA = "%s"`, Escape(dbName, false))
 
+	var tables []string
+	for _, tb := range tbName {
+		tables = append(tables, "'"+Escape(tb, false)+"'")
+	}
 	if len(tbName) > 0 {
-		extra := fmt.Sprintf(` AND C.TABLE_NAME IN ("%s")`, strings.Join(tbName, `","`))
+		extra := fmt.Sprintf(` AND C.TABLE_NAME IN ("%s")`, strings.Join(tables, ","))
 		sql = sql + extra
 	}
 
+	common.Log.Debug("ShowReference, execute SQL: %s", sql)
 	// 执行SQL查找外键关联关系
 	res, err := db.Query(sql)
 	if err != nil {
 		return referenceValues, err
 	}
 
-	refDb := res.Result.Map("REFERENCED_TABLE_SCHEMA")
-	refTb := res.Result.Map("REFERENCED_TABLE_NAME")
-	schema := res.Result.Map("TABLE_SCHEMA")
-	tb := res.Result.Map("TABLE_NAME")
-	cName := res.Result.Map("CONSTRAINT_NAME")
-
 	// 获取值
-	for _, row := range res.Rows {
-		value := ReferenceValue{
-			RefDBName:      row.Str(refDb),
-			RefTable:       row.Str(refTb),
-			DBName:         row.Str(schema),
-			Table:          row.Str(tb),
-			ConstraintName: row.Str(cName),
+	for res.Rows.Next() {
+		var rv ReferenceValue
+		err = res.Rows.Scan(&rv.ReferencedTableSchema, &rv.ReferencedTableName, &rv.TableSchema, &rv.TableName, &rv.ConstraintName)
+		if err != nil {
+			break
 		}
-		referenceValues = append(referenceValues, value)
+		referenceValues = append(referenceValues, rv)
 	}
-
+	res.Rows.Close()
 	return referenceValues, err
-
 }

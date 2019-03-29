@@ -17,25 +17,31 @@
 package advisor
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/XiaoMi/soar/common"
+	"github.com/XiaoMi/soar/database"
 	"github.com/XiaoMi/soar/env"
 
 	"github.com/kr/pretty"
 	"vitess.io/vitess/go/vt/sqlparser"
 )
 
-func init() {
+var update = flag.Bool("update", false, "update .golden files")
+var vEnv *env.VirtualEnv
+var rEnv *database.Connector
+
+func TestMain(m *testing.M) {
+	// 初始化 init
 	common.BaseDir = common.DevPath
 	err := common.ParseConfig("")
-	if err != nil {
-		fmt.Println(err.Error())
-	}
-	vEnv, rEnv := env.BuildEnv()
+	common.LogIfError(err, "init ParseConfig")
+	common.Log.Debug("advisor_test init")
+	vEnv, rEnv = env.BuildEnv()
 	if _, err = vEnv.Version(); err != nil {
 		fmt.Println(err.Error(), ", By pass all advisor test cases")
 		os.Exit(0)
@@ -45,6 +51,13 @@ func init() {
 		fmt.Println(err.Error(), ", By pass all advisor test cases")
 		os.Exit(0)
 	}
+
+	// 分割线
+	flag.Parse()
+	m.Run()
+
+	// 环境清理
+	vEnv.CleanUp()
 }
 
 // ARG.003
@@ -52,8 +65,6 @@ func TestRuleImplicitConversion(t *testing.T) {
 	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	dsn := common.Config.OnlineDSN
 	common.Config.OnlineDSN = common.Config.TestDSN
-	vEnv, rEnv := env.BuildEnv()
-	defer vEnv.CleanUp()
 
 	initSQLs := []string{
 		`CREATE TABLE t1 (id int, title varchar(255) CHARSET utf8 COLLATE utf8_general_ci);`,
@@ -122,6 +133,7 @@ func TestRuleImplicitConversion(t *testing.T) {
 
 	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 	common.Config.OnlineDSN = dsn
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 // JOI.003 & JOI.004
@@ -132,9 +144,6 @@ func TestRuleImpossibleOuterJoin(t *testing.T) {
 		`select city_id, city, country from city left outer join country using(country_id) WHERE country.country='Algeria'`,
 		`select city_id, city, country from city left outer join country on city.country_id=country.country_id WHERE city.city_id IS NULL`,
 	}
-
-	vEnv, rEnv := env.BuildEnv()
-	defer vEnv.CleanUp()
 
 	for _, sql := range sqls {
 		stmt, syntaxErr := sqlparser.Parse(sql)
@@ -174,9 +183,6 @@ func TestIndexAdvisorRuleGroupByConst(t *testing.T) {
 			`select film_id, title from film where release_year in ('2006', '2007') group by release_year`,
 		},
 	}
-
-	vEnv, rEnv := env.BuildEnv()
-	defer vEnv.CleanUp()
 
 	for _, sql := range sqls[0] {
 		stmt, syntaxErr := sqlparser.Parse(sql)
@@ -240,9 +246,6 @@ func TestIndexAdvisorRuleOrderByConst(t *testing.T) {
 		},
 	}
 
-	vEnv, rEnv := env.BuildEnv()
-	defer vEnv.CleanUp()
-
 	for _, sql := range sqls[0] {
 		stmt, syntaxErr := sqlparser.Parse(sql)
 		if syntaxErr != nil {
@@ -304,9 +307,6 @@ func TestRuleUpdatePrimaryKey(t *testing.T) {
 		},
 	}
 
-	vEnv, rEnv := env.BuildEnv()
-	defer vEnv.CleanUp()
-
 	for _, sql := range sqls[0] {
 		stmt, syntaxErr := sqlparser.Parse(sql)
 		if syntaxErr != nil {
@@ -357,10 +357,8 @@ func TestRuleUpdatePrimaryKey(t *testing.T) {
 
 func TestIndexAdvise(t *testing.T) {
 	common.Log.Debug("Entering function: %s", common.GetFunctionName())
-	minCardinalityBak := common.Config.MinCardinality
+	orgMinCardinality := common.Config.MinCardinality
 	common.Config.MinCardinality = 20
-	vEnv, rEnv := env.BuildEnv()
-	defer vEnv.CleanUp()
 
 	for _, sql := range common.TestSQLs {
 		stmt, syntaxErr := sqlparser.Parse(sql)
@@ -384,15 +382,14 @@ func TestIndexAdvise(t *testing.T) {
 			}
 		}
 	}
+	common.Config.MinCardinality = orgMinCardinality
 	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
-	common.Config.MinCardinality = minCardinalityBak
 }
 
 func TestIndexAdviseNoEnv(t *testing.T) {
-	common.Config.OnlineDSN.Disable = true
 	common.Log.Debug("Entering function: %s", common.GetFunctionName())
-	vEnv, rEnv := env.BuildEnv()
-	defer vEnv.CleanUp()
+	orgOnlineDSNStatus := common.Config.OnlineDSN.Disable
+	common.Config.OnlineDSN.Disable = true
 
 	for _, sql := range common.TestSQLs {
 		stmt, syntaxErr := sqlparser.Parse(sql)
@@ -416,19 +413,21 @@ func TestIndexAdviseNoEnv(t *testing.T) {
 			}
 		}
 	}
+	common.Config.OnlineDSN.Disable = orgOnlineDSNStatus
 	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestDuplicateKeyChecker(t *testing.T) {
 	common.Log.Debug("Entering function: %s", common.GetFunctionName())
-	_, rEnv := env.BuildEnv()
 	rule := DuplicateKeyChecker(rEnv, "sakila")
 	if len(rule) != 0 {
 		t.Errorf("got rules: %s", pretty.Sprint(rule))
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestMergeAdvices(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	dst := []IndexInfo{
 		{
 			Name:     "test",
@@ -448,6 +447,7 @@ func TestMergeAdvices(t *testing.T) {
 	if len(advise) != 1 {
 		t.Error(pretty.Sprint(advise))
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestIdxColsTypeCheck(t *testing.T) {
@@ -455,9 +455,6 @@ func TestIdxColsTypeCheck(t *testing.T) {
 	sqls := []string{
 		`select city_id, city, country from city left outer join country using(country_id) WHERE city.city_id=59 and country.country='Algeria'`,
 	}
-
-	vEnv, rEnv := env.BuildEnv()
-	defer vEnv.CleanUp()
 
 	for _, sql := range sqls {
 		stmt, syntaxErr := sqlparser.Parse(sql)
@@ -496,13 +493,16 @@ func TestIdxColsTypeCheck(t *testing.T) {
 			}
 		}
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
 
 func TestGetRandomIndexSuffix(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	for i := 0; i < 5; i++ {
 		r := getRandomIndexSuffix()
 		if !(strings.HasPrefix(r, "_") && len(r) == 5) {
 			t.Errorf("getRandomIndexSuffix should return a string with prefix `_` and 5 length, but got:%s", r)
 		}
 	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }

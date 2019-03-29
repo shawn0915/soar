@@ -17,7 +17,6 @@
 package database
 
 import (
-	"flag"
 	"testing"
 
 	"github.com/XiaoMi/soar/common"
@@ -25,31 +24,37 @@ import (
 	"github.com/kr/pretty"
 )
 
-var update = flag.Bool("update", false, "update .golden files")
-
 func TestTrace(t *testing.T) {
-	common.Config.QueryTimeOut = 1
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
+	sqls := []string{
+		"select 1",
+		"explain select 1",
+		"show create table film",
+	}
+	err := common.GoldenDiff(func() {
+		for _, sql := range sqls {
+			res, err := connTest.Trace(sql)
+			pretty.Println(sql, res, err)
+		}
+	}, t.Name(), update)
+	if err != nil {
+		t.Error(err)
+	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
+}
+
+func TestFormatTrace(t *testing.T) {
+	common.Log.Debug("Entering function: %s", common.GetFunctionName())
 	res, err := connTest.Trace("select 1")
 	if err != nil {
 		t.Error(err)
 	}
-	pretty.Println(res)
-}
 
-func TestFormatTrace(t *testing.T) {
-	res, err := connTest.Trace("select 1")
-	if err == nil {
+	err = common.GoldenDiff(func() {
 		pretty.Println(FormatTrace(res))
-	} else {
+	}, t.Name(), update)
+	if err != nil {
 		t.Error(err)
 	}
-}
-
-func TestGetTrace(t *testing.T) {
-	res, err := connTest.Trace("select 1")
-	if err == nil {
-		pretty.Println(getTrace(res))
-	} else {
-		t.Error(err)
-	}
+	common.Log.Debug("Exiting function: %s", common.GetFunctionName())
 }
